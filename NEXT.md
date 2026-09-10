@@ -6,7 +6,7 @@ on Metal, CPU-validated only). Date: 2026-09-10.
 
 Goal (unchanged from the task): prefill of the **whole**
 `ddalcu/Qwen3.8-Flash-Next-MLX-Serve-4bit` model **>1.5×** vs upstream mlx-serve,
-no quality loss. These three levers are the in-cloud-built candidates; **none of
+no quality loss. These four levers are the in-cloud-built candidates; **none of
 them has a measured tok/s yet, and none reaches 1.5× alone** — the target is the
 compatible set.
 
@@ -72,6 +72,29 @@ part of the ≈35% MoE block; removes ~1.3 GB/layer of intermediate traffic)
   bfloat16-widened Reduce, bf16 out — PASS vs f64).
 - Test: `test "fused MoE down+score+reduce matches the composed take/multiply/sum chain"`.
 
+### Lever D — fused MoE gate/up + GeGLU (sorted prefill path; the bigger MoE
+item — drops two gather_qmm launches + the activation per layer)
+- File: `src/transformer.zig` (`MOE_GATEUP_SCHEDULE_SOURCE`,
+  `MOE_GATEUP_SOURCE`, `moeGateUpFused`), wired into `moeMLP2`'s `do_sort`
+  branch before the separate gate/up `gather_qmm` calls.
+- Env: `MLX_SERVE_MOE_GATEUP_FUSED=1` (default off, `=0` kill switch).
+- What it changes: a 512-thread schedule pass (faithful port of the handoff
+  `work/grouped_qmm_tiles.metal` — per-expert binary search over the sorted
+  ids emits `{start,count,block}` tiles, `simd_prefix_inclusive_sum` for the
+  offset, NO early return so every lane reaches the warp-collective) feeds a
+  tiled plain-SIMD GEMM: one threadgroup per (tile, column-block), every slot
+  in a tile shares ONE expert, dequant in fp32 (same model as MLX gather_qmm /
+  the bit-exact decode gatherQmv — no bf16 rounding of the weight), fp32 dot
+  rounded to bf16 gate/up, then the same LUT silu·up as `fusedSwiGLU`.
+- Gated to 4-bit affine / group 64 / K%64==0 / N%64==0 / E≤512 / no expert
+  bias / silu (non-gpt-oss); the composed chain stays as fallback. The GEMM is
+  plain-SIMD (no NAX/steel header), so expect it to need a perf pass (§4)
+  before it wins at prefill scale.
+- CPU evidence: `research/moe_gateup_reference.py` (schedule covers every slot
+  exactly once; kernel == composed modulo fp32 dot order — exact 0 at small
+  configs, ~1e-3 at reduced-prod config; both ~bf16-precision vs f64).
+- Test: `test "fused prefill gate+up+GeGLU matches gather_qmm + fusedSwiGLU (sorted path)"`.
+
 ---
 
 ## 2. What to do on the Mac (in order)
@@ -82,15 +105,16 @@ part of the ≈35% MoE block; removes ~1.3 GB/layer of intermediate traffic)
    git checkout arena/01a08be3-mlx-serve
    zig build test          # full suite must be green on Apple Silicon
    ```
-   Fix any MSL compile errors the first build surfaces (the three kernels'
+   Fix any MSL compile errors the first build surfaces (the four kernels'
    bodies are in `src/transformer.zig` as `*_SOURCE` string constants).
 
 2. **Per-lever parity tests** (each opt-in, each must match its reference):
    ```sh
-   zig build test  # run the three tests named in §1; also:
+   zig build test  # run the four tests named in §1; also:
    MLX_SERVE_GDN_CHUNKED=1 zig build test   # gdnChunkedParityCase + continuity
    MLX_SERVE_HC_UP_MIX=1   zig build test
    MLX_SERVE_MOE_DOWN_REDUCE=1 zig build test
+   MLX_SERVE_MOE_GATEUP_FUSED=1 zig build test
    ```
    Cross-check the fused outputs against `research/*_reference.py` /
    `*_kernel_sim.py` on a fixed seed if any tolerance looks tight.
@@ -121,14 +145,15 @@ part of the ≈35% MoE block; removes ~1.3 GB/layer of intermediate traffic)
 5. **Report back** (append to this file or a new `REPORT-M5.md`): the commit
    SHA tested, build log, which tests passed/failed, the exact env flags used,
    the log lines showing each kernel engaged (e.g. `[hc] fused prefill up+mix
-   kernel engaged`, `[moe] fused down+score+reduce kernel engaged`), and the
+   kernel engaged`, `[moe] fused down+score+reduce kernel engaged`,
+   `[moe] fused gate+up+GeGLU kernel engaged`), and the
    baseline vs candidate `prefillTokPerSec` per run.
 
 ---
 
 ## 3. Honest status (do not overstate)
 
-- All three kernels are **CPU-validated and type-checked, but NOT Metal-built**.
+- All four kernels are **CPU-validated and type-checked, but NOT Metal-built**.
 - **No M5 tok/s has been measured.** Depth-reduction (GDN) is the only
   potentially large algorithmic win; HC/MoE are fusion micro-wins. The 1.5×
   whole-model target is NOT yet demonstrated and likely needs the set plus the
@@ -136,10 +161,12 @@ part of the ≈35% MoE block; removes ~1.3 GB/layer of intermediate traffic)
 
 ## 4. Still open (for whoever continues after M5 validation)
 
-- **MoE gate/up/GeGLU fusion** (bigger MoE item): the handoff prototype
+- **NAX perf pass** for the two plain-SIMD GEMMs (MoE gate/up and HC up-mix):
+  the handoff prototype
   `research/qwen-prefill-cloud-handoff-20260910:patches/moe-gateup.patch` +
   `work/moe_prefill_gateup.metal` (NAX + Apple MLX steel header) compiled on
-  Mac but had no whole-model proof — port to current main and re-measure.
+  Mac but had no whole-model proof — swap the plain-SIMD inner loop for the
+  NAX outer-product form and re-measure if Lever D / B under-deliver.
 - **Attention/QSA** (~23%): QSA gather/score already upstream (#388); look for
   block-reuse / query-grouping, not re-counting the upstream win.
-- **HC write side** and the **NAX perf pass** for the up-mix GEMM.
+- **HC write side**.
