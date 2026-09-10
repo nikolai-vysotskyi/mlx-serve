@@ -3212,6 +3212,51 @@ fn qsaGatherBk() c_int {
     return v;
 }
 
+pub var qsa_group_override: ?bool = null;
+var qsa_group_env_cached: ?bool = null;
+pub var qsa_group_g_override: ?c_int = null;
+var qsa_group_g_cached: ?c_int = null;
+
+/// Query-grouped (block-reuse) prefill QSA gather. Default off (opt-in);
+/// MLX_SERVE_QSA_GROUP=1 engages it, `=0` restores the single-token kernel.
+/// G adjacent tokens are merged into one threadgroup so each distinct selected
+/// key/value block is staged once instead of once per token (~Gx fewer K/V
+/// HBM reads at prefill, where adjacent tokens share ~their whole selection).
+pub fn qsaGroupEnabled() bool {
+    if (qsa_group_override) |v| return v;
+    if (qsa_group_env_cached) |v| return v;
+    const raw = std.c.getenv("MLX_SERVE_QSA_GROUP");
+    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
+    qsa_group_env_cached = enabled;
+    return enabled;
+}
+
+/// Tokens per threadgroup for the grouped gather (MLX_SERVE_QSA_GROUP_G,
+/// default 4). Capped by eligibility (32*NSG*G <= 256 threads).
+pub fn qsaGroupG() c_int {
+    if (qsa_group_g_override) |v| return v;
+    if (qsa_group_g_cached) |v| return v;
+    var v: c_int = 4;
+    if (std.c.getenv("MLX_SERVE_QSA_GROUP_G")) |raw| {
+        const parsed = std.fmt.parseInt(c_int, std.mem.sliceTo(raw, 0), 10) catch v;
+        if (parsed >= 1) v = parsed;
+    }
+    qsa_group_g_cached = v;
+    return v;
+}
+
+/// Geometry gate for the grouped kernel: at least a full group of queries,
+/// BK a multiple of RATIO (TB = BK/RATIO whole blocks per tile), and the
+/// threadgroup bounded to 256 threads (32 lanes * NSG simdgroups * G).
+fn qsaGroupEligible(q_len: c_int, gqa: c_int, ratio: c_int, bk: c_int, g: c_int) bool {
+    if (g < 2 or q_len < g) return false;
+    if (bk != 16 and bk != 32) return false;
+    if (ratio <= 0 or ratio > bk or @rem(bk, ratio) != 0) return false;
+    const nsg: c_int = @divTrunc(gqa + 7, 8);
+    if (nsg <= 0 or nsg * g > 8) return false;
+    return true;
+}
+
 pub var qsa_decode_gather_override: ?bool = null;
 var qsa_decode_gather_env_cached: ?bool = null;
 
@@ -3410,7 +3455,256 @@ const ATTN_QSA256_KERNEL_SOURCE =
     \\}
 ;
 
+/// msv_attn_qsa256_grp: the query-grouped (block-reuse) form of the prefill QSA
+/// gather. One threadgroup serves G adjacent query tokens for one (kv head,
+/// batch). It k-way merges the G sorted block selections into a union -- each
+/// distinct block is staged ONCE, with a per-token row count (full `RATIO`
+/// rows for a selected complete block, `tail_rows` for a partial tail block, 0
+/// for a token that did not pick it) -- then feeds every token from the SAME
+/// staged K/V tile. Per-token online-softmax state stays per-row and
+/// per-simdgroup (simdgroup w -> token w/NSG, row-band w%NSG), so registers do
+/// not grow vs the single-token kernel; only the threadgroup gains Gx
+/// simdgroups. Each token's keys are still visited in ascending absolute
+/// position (its gathered sequence is a sorted subset of the union), so the
+/// result matches msv_attn_qsa256 up to fp32 tile-boundary rounding.
+/// Adjacent prefill tokens select ~the same KB blocks, so the union stages
+/// ~KB+RATIO blocks instead of G*KB -- the HBM K/V reads drop ~Gx. The merge
+/// runs redundantly in every thread (deterministic, G tiny), so no extra
+/// threadgroup memory is needed. Gate: BK % RATIO == 0 and 32*NSG*G <= 256
+/// threads; MLX_SERVE_QSA_GROUP=1 (default off) engages it, the single-token
+/// kernel stays the fallback.
+const ATTN_QSA256_GROUP_SOURCE =
+    \\constexpr int BD = 256;
+    \\constexpr int LDK = BK + 8;
+    \\constexpr int LDV = BD + 8;
+    \\constexpr int NT = 32 * NSG * G;
+    \\constexpr int KT = BK / 8;
+    \\constexpr int TB = BK / RATIO;
+    \\constexpr int SENTINEL = 2147483647;
+    \\static_assert(BK % RATIO == 0, "grouped QSA needs BK % RATIO == 0");
+    \\static_assert(32 * NSG * G <= 256, "grouped QSA threadgroup <= 256");
+    \\
+    \\const int qL = q_shape[2];
+    \\const int kL = k_shape[2];
+    \\const int Hq = q_shape[1];
+    \\const int Hk = k_shape[1];
+    \\const int gqa = Hq / Hk;
+    \\const int KB = blocks_shape[2];
+    \\
+    \\const int g = int(threadgroup_position_in_grid.x);
+    \\const int hk = int(threadgroup_position_in_grid.y);
+    \\const int bb = int(threadgroup_position_in_grid.z);
+    \\const ushort lane = ushort(thread_index_in_simdgroup);
+    \\const ushort warp = ushort(simdgroup_index_in_threadgroup);
+    \\const int tix = int(thread_index_in_threadgroup);
+    \\
+    \\const int t_in = int(warp) / NSG;
+    \\const int band = int(warp) % NSG;
+    \\const int s = g * G + t_in;
+    \\const bool s_ok = s < qL;
+    \\
+    \\const float scale_log2e = scl[0] * 1.44269504088896340736f;
+    \\
+    \\const device T* Kp = k + bb * k_strides[0] + hk * k_strides[1];
+    \\const device T* Vp = v + bb * v_strides[0] + hk * v_strides[1];
+    \\
+    \\threadgroup T KVs[LDK * BD];
+    \\threadgroup T* Ks = KVs;
+    \\threadgroup T* Vs = KVs;
+    \\
+    \\const short2 sc = msv_coord(lane);
+    \\const short sn = sc.x;
+    \\const short sm = sc.y;
+    \\const short tm = 8 * short(band);
+    \\const int Ks_off = sm * LDK + sn;
+    \\const int Vs_off = sm * LDV + sn;
+    \\const int row = tm + sm;
+    \\const bool row_ok = row < gqa;
+    \\
+    \\float2 Qfrag[BD / 8];
+    \\if (s_ok && row_ok) {
+    \\  const device T* Qrow = q + bb * q_strides[0] + (long)(hk * gqa + row) * q_strides[1] + (long)s * q_strides[2];
+    \\  for (int dd = 0; dd < BD / 8; ++dd) {
+    \\    const vec<T, 2> pr = *((const device vec<T, 2>*)(Qrow + dd * 8 + sn));
+    \\    Qfrag[dd] = float2(float(pr.x), float(pr.y));
+    \\  }
+    \\} else {
+    \\  for (int dd = 0; dd < BD / 8; ++dd) Qfrag[dd] = float2(0.0f);
+    \\}
+    \\float2 Ofrag[BD / 8];
+    \\for (int i = 0; i < BD / 8; ++i) Ofrag[i] = float2(0.0f);
+    \\float max_score = -3.0e38f;
+    \\float sum_score = 0.0f;
+    \\
+    \\// k-way merge state; every thread computes the SAME union redundantly.
+    \\int cnt[G];
+    \\int cpl[G];
+    \\int tlr[G];
+    \\int bi[G];
+    \\int nxt[G];
+    \\int nxtn[G];
+    \\for (int t = 0; t < G; ++t) {
+    \\  const int st = g * G + t;
+    \\  if (st >= qL) { cnt[t] = 0; cpl[t] = 0; tlr[t] = 0; bi[t] = -1; nxt[t] = SENTINEL; nxtn[t] = 0; continue; }
+    \\  const int p = (kL - qL) + st;
+    \\  const int complete = (p + 1) / RATIO;
+    \\  const int count = metal::min(complete, KB);
+    \\  const int tail_start = complete * RATIO;
+    \\  const int tail_rows = p + 1 - tail_start;
+    \\  cnt[t] = count; cpl[t] = complete; tlr[t] = tail_rows;
+    \\  const device int* bp = blocks + (long)bb * blocks_strides[0] + (long)st * blocks_strides[1];
+    \\  if (count > 0) { bi[t] = 0; nxt[t] = bp[0]; nxtn[t] = RATIO; }
+    \\  else if (tail_rows > 0) { bi[t] = -1; nxt[t] = complete; nxtn[t] = tail_rows; }
+    \\  else { bi[t] = -1; nxt[t] = SENTINEL; nxtn[t] = 0; }
+    \\}
+    \\
+    \\int tile_blk[TB];
+    \\int tile_nrows[TB * G];
+    \\
+    \\for (;;) {
+    \\  int produced = 0;
+    \\  for (int u = 0; u < TB; ++u) {
+    \\    int mb = SENTINEL;
+    \\    for (int t = 0; t < G; ++t) mb = metal::min(mb, nxt[t]);
+    \\    if (mb == SENTINEL) break;
+    \\    tile_blk[u] = mb;
+    \\    for (int t = 0; t < G; ++t) tile_nrows[u * G + t] = (nxt[t] == mb) ? nxtn[t] : 0;
+    \\    for (int t = 0; t < G; ++t) {
+    \\      if (nxt[t] != mb) continue;
+    \\      if (bi[t] >= 0) {
+    \\        bi[t] += 1;
+    \\        if (bi[t] < cnt[t]) {
+    \\          const device int* bp = blocks + (long)bb * blocks_strides[0] + (long)(g * G + t) * blocks_strides[1];
+    \\          nxt[t] = bp[bi[t]]; nxtn[t] = RATIO;
+    \\        } else if (tlr[t] > 0) { nxt[t] = cpl[t]; nxtn[t] = tlr[t]; bi[t] = -1; }
+    \\        else { nxt[t] = SENTINEL; nxtn[t] = 0; }
+    \\      } else { nxt[t] = SENTINEL; nxtn[t] = 0; }
+    \\    }
+    \\    produced += 1;
+    \\  }
+    \\  if (produced == 0) break;
+    \\  for (int u = produced; u < TB; ++u) {
+    \\    tile_blk[u] = SENTINEL;
+    \\    for (int t = 0; t < G; ++t) tile_nrows[u * G + t] = 0;
+    \\  }
+    \\  int maxn[TB];
+    \\  for (int u = 0; u < TB; ++u) {
+    \\    int mn = 0;
+    \\    for (int t = 0; t < G; ++t) mn = metal::max(mn, tile_nrows[u * G + t]);
+    \\    maxn[u] = mn;
+    \\  }
+    \\
+    \\  threadgroup_barrier(metal::mem_flags::mem_threadgroup);
+    \\  for (int i = tix; i < BK * (BD / 8); i += NT) {
+    \\    const int r = i >> 5;
+    \\    const int c8 = i & 31;
+    \\    const int u = r / RATIO;
+    \\    const int inrow = r - u * RATIO;
+    \\    uint4 w = uint4(0);
+    \\    if (tile_blk[u] != SENTINEL && inrow < maxn[u]) {
+    \\      const int pos = tile_blk[u] * RATIO + inrow;
+    \\      w = *((const device uint4*)(Kp + (long)pos * k_strides[2]) + c8);
+    \\    }
+    \\    thread T* e = (thread T*)&w;
+    \\    const int cb = c8 * 8;
+    \\    for (int j = 0; j < 8; ++j) Ks[(cb + j) * LDK + r] = e[j];
+    \\  }
+    \\  threadgroup_barrier(metal::mem_flags::mem_threadgroup);
+    \\
+    \\  float2 Sfrag[KT];
+    \\  for (int i = 0; i < KT; ++i) Sfrag[i] = float2(0.0f);
+    \\  for (int dd = 0; dd < BD / 8; ++dd) {
+    \\    const float2 qf = Qfrag[dd];
+    \\    const int kbase = Ks_off + dd * 8 * LDK;
+    \\    for (int kt = 0; kt < KT; ++kt) {
+    \\      const float2 kf = float2(float(Ks[kbase + kt * 8]), float(Ks[kbase + kt * 8 + 1]));
+    \\      msv_mma(Sfrag[kt], qf, kf);
+    \\    }
+    \\  }
+    \\  for (int kt = 0; kt < KT; ++kt) Sfrag[kt] *= scale_log2e;
+    \\  // per-token mask: rows outside this token's gathered sequence -> -inf
+    \\  for (int kt = 0; kt < KT; ++kt) {
+    \\    const int rx = kt * 8 + sn;
+    \\    const int ux = rx / RATIO;
+    \\    const int ix = rx - ux * RATIO;
+    \\    if (tile_blk[ux] == SENTINEL || tile_nrows[ux * G + t_in] <= ix) Sfrag[kt].x = -INFINITY;
+    \\    const int ry = rx + 1;
+    \\    const int uy = ry / RATIO;
+    \\    const int iy = ry - uy * RATIO;
+    \\    if (tile_blk[uy] == SENTINEL || tile_nrows[uy * G + t_in] <= iy) Sfrag[kt].y = -INFINITY;
+    \\  }
+    \\
+    \\  threadgroup_barrier(metal::mem_flags::mem_threadgroup);
+    \\  for (int i = tix; i < BK * (BD / 8); i += NT) {
+    \\    const int r = i >> 5;
+    \\    const int c8 = i & 31;
+    \\    const int u = r / RATIO;
+    \\    const int inrow = r - u * RATIO;
+    \\    uint4 w = uint4(0);
+    \\    if (tile_blk[u] != SENTINEL && inrow < maxn[u]) {
+    \\      const int pos = tile_blk[u] * RATIO + inrow;
+    \\      w = *((const device uint4*)(Vp + (long)pos * v_strides[2]) + c8);
+    \\    }
+    \\    *((threadgroup uint4*)(Vs + r * LDV) + c8) = w;
+    \\  }
+    \\
+    \\  float new_max = max_score;
+    \\  for (int kt = 0; kt < KT; ++kt) new_max = metal::max(new_max, msv_row_max(Sfrag[kt]));
+    \\  float rowsum = 0.0f;
+    \\  for (int kt = 0; kt < KT; ++kt) {
+    \\    Sfrag[kt] = metal::exp2(Sfrag[kt] - new_max);
+    \\    rowsum += msv_row_sum(Sfrag[kt]);
+    \\  }
+    \\  const float factor = metal::exp2(max_score - new_max);
+    \\  max_score = new_max;
+    \\  sum_score = sum_score * factor + rowsum;
+    \\  for (int i = 0; i < BD / 8; ++i) Ofrag[i] *= factor;
+    \\
+    \\  threadgroup_barrier(metal::mem_flags::mem_threadgroup);
+    \\  for (int id = 0; id < BD / 8; ++id) {
+    \\    const int vbase = Vs_off + id * 8;
+    \\    for (int kt = 0; kt < KT; ++kt) {
+    \\      const float2 vf = float2(float(Vs[vbase + kt * 8 * LDV]), float(Vs[vbase + kt * 8 * LDV + 1]));
+    \\      msv_mma(Ofrag[id], Sfrag[kt], vf);
+    \\    }
+    \\  }
+    \\}
+    \\
+    \\if (s_ok && row_ok) {
+    \\  const float inv = 1.0f / sum_score;
+    \\  device T* Optr = out + (((long)bb * Hq + (hk * gqa + row)) * (long)qL + (long)s) * BD + sn;
+    \\  for (int id = 0; id < BD / 8; ++id) {
+    \\    Optr[id * 8] = T(Ofrag[id].x * inv);
+    \\    Optr[id * 8 + 1] = T(Ofrag[id].y * inv);
+    \\  }
+    \\}
+;
+
 var attn_qsa256_kernel_cached: ?mlx.mlx_fast_metal_kernel = null;
+
+var attn_qsa256_group_kernel_cached: ?mlx.mlx_fast_metal_kernel = null;
+
+fn getAttnQsa256GroupKernel() !mlx.mlx_fast_metal_kernel {
+    if (attn_qsa256_group_kernel_cached) |kk| return kk;
+    const input_names = [_][*:0]const u8{ "q", "k", "v", "scl", "blocks" };
+    const output_names = [_][*:0]const u8{"out"};
+    const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+    defer _ = mlx.mlx_vector_string_free(in_vec);
+    const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+    defer _ = mlx.mlx_vector_string_free(out_vec);
+    const kernel = mlx.mlx_fast_metal_kernel_new(
+        "msv_attn_qsa256_grp",
+        in_vec,
+        out_vec,
+        ATTN_QSA256_GROUP_SOURCE,
+        ATTN_QSA256_KERNEL_HEADER,
+        false, // K/V are cache views (see msv_attn_p256)
+        false,
+    );
+    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+    attn_qsa256_group_kernel_cached = kernel;
+    return kernel;
+}
 
 fn getAttnQsa256Kernel() !mlx.mlx_fast_metal_kernel {
     if (attn_qsa256_kernel_cached) |kk| return kk;
@@ -3772,6 +4066,17 @@ const QsaGatherCfgKey = struct {
 };
 var qsa_gather_cfgs = QsaCfgCache(QsaGatherCfgKey, 1){};
 
+const QsaGroupCfgKey = struct {
+    q_shape: ShapeKey,
+    h_kv: c_int,
+    nsg: c_int,
+    bk: c_int,
+    ratio: c_int,
+    g: c_int,
+    dtype: mlx.mlx_dtype,
+};
+var qsa_group_cfgs = QsaCfgCache(QsaGroupCfgKey, 1){};
+
 /// Block-gathered QSA attention (qwen4_exp prefill): `blocks` is the
 /// [B, S, KB] int32 selection, each row ascending with INT_MAX past its
 /// count; `ratio` tokens per block. Same envelope as the p256 kernel (hd
@@ -3812,6 +4117,17 @@ pub fn gatherQsa256(
         gqa,
         qs[2],
     );
+    const nsg: c_int = @divTrunc(gqa + 7, 8);
+    const bk: c_int = if (use_nax) 32 else qsaGatherBk();
+    var use_group = false;
+    var group_g: c_int = 0;
+    if (!use_nax) {
+        const g_cand = qsaGroupG();
+        if (qsaGroupEnabled() and qsaGroupEligible(qs[2], gqa, ratio, bk, g_cand)) {
+            use_group = true;
+            group_g = g_cand;
+        }
+    }
     const kernel = blk: {
         if (use_nax) {
             break :blk getQsaNaxKernel() catch {
@@ -3820,6 +4136,7 @@ pub fn gatherQsa256(
                 break :blk getAttnQsa256Kernel() catch return null;
             };
         }
+        if (use_group) break :blk getAttnQsa256GroupKernel() catch return null;
         break :blk getAttnQsa256Kernel() catch return null;
     };
     qsa_gather_used_nax = use_nax;
@@ -3827,8 +4144,6 @@ pub fn gatherQsa256(
     const scl_data = [_]f32{scale};
     const scl = mlx.mlx_array_new_data(&scl_data, &one, 1, .float32);
     defer _ = mlx.mlx_array_free(scl);
-    const nsg: c_int = @divTrunc(gqa + 7, 8);
-    const bk: c_int = if (use_nax) 32 else qsaGatherBk();
     const key = QsaGatherCfgKey{
         .q_shape = ShapeKey.from(qs),
         .h_kv = ks[1],
@@ -3838,20 +4153,47 @@ pub fn gatherQsa256(
         .nax = use_nax,
         .dtype = .bfloat16,
     };
-    const cfgs: [1]mlx.mlx_fast_metal_kernel_config = qsa_gather_cfgs.get(key) orelse blk: {
-        const config = mlx.mlx_fast_metal_kernel_config_new();
-        errdefer _ = mlx.mlx_fast_metal_kernel_config_free(config);
-        const o_shape = [_]c_int{ qs[0], qs[1], qs[2], 256 };
-        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &o_shape, 4, .bfloat16));
-        try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(config, qs[2] * 32, ks[1] * nsg, qs[0]));
-        try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(config, 32, nsg, 1));
-        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(config, "T", .bfloat16));
-        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "NSG", nsg));
-        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "BK", bk));
-        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "RATIO", ratio));
-        qsa_gather_cfgs.put(key, .{config});
-        break :blk .{config};
+    const group_key = QsaGroupCfgKey{
+        .q_shape = ShapeKey.from(qs),
+        .h_kv = ks[1],
+        .nsg = nsg,
+        .bk = bk,
+        .ratio = ratio,
+        .g = group_g,
+        .dtype = .bfloat16,
     };
+    const cfgs: [1]mlx.mlx_fast_metal_kernel_config = if (use_group)
+        (qsa_group_cfgs.get(group_key) orelse blk: {
+            const config = mlx.mlx_fast_metal_kernel_config_new();
+            errdefer _ = mlx.mlx_fast_metal_kernel_config_free(config);
+            const o_shape = [_]c_int{ qs[0], qs[1], qs[2], 256 };
+            try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &o_shape, 4, .bfloat16));
+            const gx: c_int = @divTrunc(qs[2] + group_g - 1, group_g);
+            try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(config, gx * 32, ks[1] * nsg * group_g, qs[0]));
+            try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(config, 32, nsg * group_g, 1));
+            try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(config, "T", .bfloat16));
+            try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "NSG", nsg));
+            try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "BK", bk));
+            try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "RATIO", ratio));
+            try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "G", group_g));
+            qsa_group_cfgs.put(group_key, .{config});
+            break :blk .{config};
+        })
+    else
+        (qsa_gather_cfgs.get(key) orelse blk: {
+            const config = mlx.mlx_fast_metal_kernel_config_new();
+            errdefer _ = mlx.mlx_fast_metal_kernel_config_free(config);
+            const o_shape = [_]c_int{ qs[0], qs[1], qs[2], 256 };
+            try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &o_shape, 4, .bfloat16));
+            try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(config, qs[2] * 32, ks[1] * nsg, qs[0]));
+            try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(config, 32, nsg, 1));
+            try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(config, "T", .bfloat16));
+            try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "NSG", nsg));
+            try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "BK", bk));
+            try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "RATIO", ratio));
+            qsa_gather_cfgs.put(key, .{config});
+            break :blk .{config};
+        });
 
     const inputs_arr = [_]mlx.mlx_array{ q, k, v, scl, blocks };
     const inputs_vec = mlx.mlx_vector_array_new_data(&inputs_arr, inputs_arr.len);
@@ -3871,6 +4213,9 @@ pub fn gatherQsa256(
         if (use_nax) {
             qsa_gather_engaged_nax += 1;
             log.info("[qsa-gather] engaged: msv_qsa_nax_precise S={d} kv={d} blocks={d} bk={d} tgmem={d} (MLX_SERVE_QSA_NAX=0 restores the stock gather)\n", .{ qs[2], ks[2], bs[2], bk, tgmem });
+        } else if (use_group) {
+            qsa_gather_engaged_stock += 1;
+            log.info("[qsa-gather] engaged: msv_attn_qsa256_grp S={d} kv={d} blocks={d} bk={d} G={d} tgmem={d} (MLX_SERVE_QSA_GROUP=0 restores the single-token gather)\n", .{ qs[2], ks[2], bs[2], bk, group_g, tgmem });
         } else {
             qsa_gather_engaged_stock += 1;
             log.info("[qsa-gather] engaged: msv_attn_qsa256 S={d} kv={d} blocks={d} bk={d} tgmem={d} (MLX_SERVE_QSA_GATHER=0 restores the dense mask arm)\n", .{ qs[2], ks[2], bs[2], bk, tgmem });
@@ -45403,6 +45748,79 @@ test "gatherQsa256 NAX: latch is consulted before NAX kernel construction" {
     defer _ = mlx.mlx_array_free(out);
     try std.testing.expect(!qsa_gather_used_nax);
     try std.testing.expectEqual(builds, qsaNaxKernelBuilds());
+}
+
+test "gatherQsa256 grouped: matches the single-token gather and the composed reference" {
+    if (mlx.noGpuBackend()) return error.SkipZigTest;
+    const s = mlx.gpuStream();
+    qsa_gather_override = true;
+    defer qsa_gather_override = null;
+    qsa_nax_override = false;
+    defer qsa_nax_override = null;
+    qsa_group_override = true;
+    defer qsa_group_override = null;
+    qsa_group_g_override = 4;
+    defer qsa_group_g_override = null;
+    qsa_gather_bk_override = 32;
+    defer qsa_gather_bk_override = null;
+
+    var prng = std.Random.DefaultPrng.init(0x9a7e + 5);
+    const rnd = prng.random();
+    // qwen4_exp geometry (24/2 heads -> gqa 12 -> nsg 2; G=4 -> 8 simdgroups).
+    const qL: c_int = 40;
+    const kL: c_int = 101;
+    const kb: c_int = 6;
+    const ratio: c_int = 4;
+    const q_shape = [_]c_int{ 1, 24, qL, 256 };
+    const kv_shape = [_]c_int{ 1, 2, kL, 256 };
+    const q = try attn256RandBf16(rnd, &q_shape, s);
+    defer _ = mlx.mlx_array_free(q);
+    const k = try attn256RandBf16(rnd, &kv_shape, s);
+    defer _ = mlx.mlx_array_free(k);
+    const v = try attn256RandBf16(rnd, &kv_shape, s);
+    defer _ = mlx.mlx_array_free(v);
+    var fx = try QsaBlockFixture.build(rnd, qL, kL, kb, ratio);
+    defer fx.deinit();
+    const scale: f32 = 1.0 / 16.0;
+
+    const ref = try attn256Reference(q, k, v, scale, "array", fx.mask, s);
+    defer _ = mlx.mlx_array_free(ref);
+
+    // grouped arm (this kernel)
+    qsa_group_override = true;
+    const grp = (try gatherQsa256(s, q, k, v, scale, fx.blocks, ratio)) orelse return error.GatherDeclined;
+    defer _ = mlx.mlx_array_free(grp);
+
+    // single-token stock arm (NAX and grouping both off)
+    qsa_group_override = false;
+    const stock = (try gatherQsa256(s, q, k, v, scale, fx.blocks, ratio)) orelse return error.GatherDeclined;
+    defer _ = mlx.mlx_array_free(stock);
+
+    const d_ref = try attn256MaxDiff(grp, ref, s);
+    const d_stock = try attn256MaxDiff(stock, ref, s);
+    const d_gs = try attn256MaxDiff(grp, stock, s);
+    std.debug.print("grouped vs ref={e} stock vs ref={e} grouped vs stock={e}\n", .{ d_ref, d_stock, d_gs });
+    // The grouped kernel visits each token's keys in the SAME ascending order
+    // as the stock kernel (only the tile boundaries move), so it must match
+    // the stock gather to fp32 rescale rounding and the composed reference
+    // within the same bar the stock kernel clears.
+    try std.testing.expect(d_ref <= @max(1.5 * d_stock, 4.9e-4));
+    try std.testing.expect(d_gs < 0.01);
+}
+
+test "gatherQsa256 grouped: geometry gate" {
+    // 24/2 heads -> gqa 12 -> nsg 2.
+    try std.testing.expect(qsaGroupEligible(40, 12, 4, 32, 4));
+    try std.testing.expect(!qsaGroupEligible(40, 12, 4, 32, 1)); // G < 2
+    try std.testing.expect(!qsaGroupEligible(3, 12, 4, 32, 4)); // qL < G
+    try std.testing.expect(!qsaGroupEligible(40, 12, 3, 32, 4)); // bk % ratio != 0
+    try std.testing.expect(!qsaGroupEligible(40, 12, 48, 32, 4)); // ratio > bk
+    try std.testing.expect(!qsaGroupEligible(40, 12, 4, 32, 5)); // nsg*g > 8
+    try std.testing.expect(!qsaGroupEligible(40, 12, 4, 24, 4)); // bk not 16/32
+    try std.testing.expect(qsaGroupEligible(40, 8, 4, 32, 8)); // gqa<=8 -> nsg 1 -> g 8
+    try std.testing.expect(!qsaGroupEligible(40, 8, 4, 32, 9)); // nsg*g > 8
+    try std.testing.expect(qsaGroupEligible(40, 12, 4, 16, 4)); // bk 16
+    try std.testing.expect(qsaGroupEligible(40, 12, 2, 32, 4)); // ratio 2 divides bk
 }
 
 test "gatherQsa256: declines a non-GPU stream before kernel selection" {

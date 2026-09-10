@@ -29,7 +29,7 @@ The first `zig build test` on Mac is expected to surface MSL compile errors.
 
 ---
 
-## 1. The six implemented levers (all opt-in, all OFF by default)
+## 1. The seven implemented levers (all opt-in, all OFF by default)
 
 ### Lever A — chunkwise GDN prefill (≈25% of the S=8192 block profile)
 - Files: `src/transformer.zig` (`GDN_CHUNK_KERNEL_{FOLD,SCAN,REPLAY}_BODY`,
@@ -142,6 +142,36 @@ item — drops two gather_qmm launches + the activation per layer)
   write+group-norm chain"` (write bit-exact, norm within the ulp bar, WR=0 arm,
   opt-in-off + H%256 declines).
 
+### Lever G — grouped-query QSA gather (cross-token block reuse; the ~23%
+attention block, beyond the upstream gather/score win)
+- File: `src/transformer.zig` (`ATTN_QSA256_GROUP_SOURCE`,
+  `getAttnQsa256GroupKernel`, `qsaGroupEnabled/G`, `qsaGroupEligible`, the
+  `use_group` arm + `QsaGroupCfgKey` cache in `gatherQsa256`).
+- Env: `MLX_SERVE_QSA_GROUP=1` (default off, `=0` kill switch),
+  `MLX_SERVE_QSA_GROUP_G=<G>` (tokens/threadgroup, default 4). Gated to
+  `BK % RATIO == 0`, `32*NSG*G <= 256`, `qL >= G`; the single-token
+  `msv_attn_qsa256` stays the fallback and NAX is untouched.
+- What it changes: one threadgroup serves G adjacent query tokens for one
+  (kv-head, batch); every thread redundantly k-way-merges the G sorted block
+  selections into a union, each distinct block staged ONCE with a per-token
+  row count (RATIO / tail_rows / 0), then every token reads the SAME staged
+  K/V tile. Per-token online-softmax state stays per-row/per-simdgroup
+  (simdgroup w → token w/NSG, row-band w%NSG), so registers don't grow. Each
+  token still visits its keys in ascending absolute position (its sequence is
+  a sorted subset of the union), so it matches the single-token kernel up to
+  fp32 tile-boundary rounding; HBM K/V reads drop ~G× at prefill where
+  adjacent tokens share ~their whole selection. Grid `⌈qL/G⌉·32 × Hkv·NSG·G × B`,
+  threadgroup `{32, NSG·G, 1}`.
+- CPU evidence: `research/qsa_group_reference.py` (union→per-token sequences
+  EXACT for every group incl. the partial last group and the
+  tail-block/selected-block overlap case; fp32 attention grouped==stock==exact
+  to 8.2e-08). Uses `SENTINEL = 2147483647` (not bare `INT_MAX`), the
+  `ATTN256_KERNEL_HEADER` mma/row-max/row-sum primitives, and `static_assert`s
+  for `BK % RATIO == 0` and `32*NSG*G <= 256`.
+- Test: `test "gatherQsa256 grouped: matches the single-token gather and the
+  composed reference"` (grp vs `attn256Reference` within the stock bar, grp vs
+  stock < 1e-2) + `test "gatherQsa256 grouped: geometry gate"`.
+
 ---
 
 ## 2. What to do on the Mac (in order)
@@ -165,6 +195,8 @@ item — drops two gather_qmm launches + the activation per layer)
    MLX_SERVE_GDN_PREFILL_FUSED=1 zig build test   # Lever E
    MLX_SERVE_GDN_CHUNKED=1 MLX_SERVE_GDN_PREFILL_FUSED=1 zig build test  # composed set
    MLX_SERVE_HC_WRITE_NORM=1 zig build test       # Lever F
+   MLX_SERVE_QSA_GROUP=1 zig build test           # Lever G (grouped QSA gather)
+   MLX_SERVE_QSA_GROUP=1 MLX_SERVE_QSA_GROUP_G=8 zig build test  # G=8 variant
    ```
    Cross-check the fused outputs against `research/*_reference.py` /
    `*_kernel_sim.py` on a fixed seed if any tolerance looks tight.
@@ -203,12 +235,15 @@ item — drops two gather_qmm launches + the activation per layer)
 
 ## 3. Honest status (do not overstate)
 
-- All six new kernels (HC up-mix, HC write+norm, MoE down+reduce, MoE
-  gateup×2, plus the chunked-GDN three) are **CPU-validated and type-checked,
-  but NOT Metal-built**. Lever E adds no new kernel — it widens the two decode
-  GDN fusion kernels to prefill widths behind an opt-in env gate. Lever F's
-  write arm is bit-exact by construction (it shares the fused-read N kernel's
-  rounding); its norm arm is the same few-ulp class as that N kernel.
+- All seven new kernels (HC up-mix, HC write+norm, MoE down+reduce, MoE
+  gateup×2, the chunked-GDN three, and the grouped-QSA gather) are
+  **CPU-validated and type-checked, but NOT Metal-built**. Lever E adds no new
+  kernel — it widens the two decode GDN fusion kernels to prefill widths behind
+  an opt-in env gate. Lever F's write arm is bit-exact by construction (it
+  shares the fused-read N kernel's rounding); its norm arm is the same few-ulp
+  class as that N kernel. Lever G's per-token key order is the stock kernel's
+  order exactly (only tile boundaries move), so it inherits the stock gather's
+  correctness up to fp32 rescale rounding.
 - **No M5 tok/s has been measured.** Depth-reduction (GDN) is the only
   potentially large algorithmic win; HC/MoE/GDN-fusions are fusion micro-wins.
   The 1.5× whole-model target is NOT yet demonstrated and likely needs the set
@@ -222,7 +257,8 @@ item — drops two gather_qmm launches + the activation per layer)
   `work/moe_prefill_gateup.metal` (NAX + Apple MLX steel header) compiled on
   Mac but had no whole-model proof — swap the plain-SIMD inner loop for the
   NAX outer-product form and re-measure if Lever D / B under-deliver.
-- **Attention/QSA** (~23%): QSA gather/score already upstream (#388); look for
-  block-reuse / query-grouping (adjacent queries re-load overlapping selected
-  key blocks from HBM — a grouped-query kernel could load each distinct block
-  once), not re-counting the upstream win.
+- **Attention/QSA** (~23%): the grouped-query block-reuse gather is now
+  implemented (Lever G, `MLX_SERVE_QSA_GROUP=1`). Still open on the attention
+  side: whether the gather is HBM-bound at all (if it's compute/occupancy-bound
+  the ~G× staging win won't show) — measure per-block HBM reads before betting
+  on it, and consider a G>4 or NAX-form variant only if the M5 profile says so.
