@@ -440,6 +440,477 @@ fn getGdnKernelBlocked(tb: u32) !mlx.mlx_fast_metal_kernel {
     return error.UnsupportedGdnBlockT;
 }
 
+// ── GatedDeltaNet chunked-prefill kernels (chunkwise/WY, rank-1 fold) ──
+//
+// **UNBUILT / UNVERIFIED draft.** The algebra is validated on CPU
+// (research/gdn_chunked_reference.py: the chunkwise form is the same
+// recurrence to f64 ~1e-15, and the f32 form passes the repo parity bar
+// err_new <= 1.5*err_stock + 0.02). This Metal + Zig plumbing has NOT been
+// compiled or run — there is no Zig/Metal on the cloud box, and CONTRIBUTING
+// requires a real Apple Silicon build + `zig build test` before any PR. Treat
+// every line as needing the Mac build; do not ship it as verified.
+//
+// Design (three phases; research/gdn_chunked_design.md has the full contract):
+//   fold   — per (b, hv, chunk), compute the chunk operator pair
+//            (A_c [Dk x Dk], B_c [Dk x Dv]) with M_{t1-1} = A_c M_{t0-1} + B_c
+//            via the AUGMENTED-BASIS recurrence: run the shipped per-token
+//            recurrence on (Dk + Dv) basis vectors (identity for the Dk
+//            A-columns, zero + real v for the Dv B-columns). A_t is a scaled
+//            rank-1 perturbation of I, so this is O(C * (Dk^2 + Dk*Dv)) — no
+//            CxC solve, no dense Dk^3 product. Fully parallel over chunks.
+//   scan   — per (b, hv), advance the boundary state M_c = A_c M_{c-1} + B_c
+//            sequentially over NC = ceil(T/C) chunks (the SHORT serial chain:
+//            NC matmul steps instead of T vector steps). Dv rows are
+//            independent, so grid.x tiles Dv like the blocked kernel. Writes
+//            the per-chunk boundary M_seq[c] (f32) for the replay.
+//   replay — per (b, hv, chunk), replay the shipped per-token recurrence over
+//            the chunk's C tokens from its boundary state (parallel). This is
+//            GDN_KERNEL_BLOCKED_BODY's inner loop re-indexed per chunk.
+//
+// The intra-chunk replay keeps the shipped kernel's EXACT per-token op order;
+// only the cross-chunk advance is re-associated (one A_c M + B_c compose vs T
+// per-token updates), which the reference shows costs ~1-2 bf16 ULP — inside
+// the repo's "no worse than stock" bar.
+//
+// Kill switch: MLX_SERVE_GDN_CHUNKED=1 (default OFF); chunk size
+// MLX_SERVE_GDN_CHUNK_C (32|64|128, default 64). Staging sub-block TB follows
+// gdnBlockTFor exactly (input-width aware: f32 activations clamp to 16).
+//
+// TODO(validation): wire into gdnForward behind gdnChunkedEnabled() +
+// gdnChunkedEligible() with fallback to the blocked kernel, then run the
+// parity sweep + continuity test + a prefillTokPerSec A/B on M5.
+
+pub var gdn_chunked_override: ?bool = null;
+var gdn_chunked_env_cached: ?bool = null;
+
+/// Chunked prefill route is opt-in (default off) until validated on hardware.
+pub fn gdnChunkedEnabled() bool {
+    if (gdn_chunked_override) |v| return v;
+    if (gdn_chunked_env_cached) |v| return v;
+    const raw = std.c.getenv("MLX_SERVE_GDN_CHUNKED");
+    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
+    gdn_chunked_env_cached = enabled;
+    return enabled;
+}
+
+/// Prefill-width floor for the chunked kernel: below this the launch overhead
+/// of three kernels beats the depth win. (Conservative; test seam ignores it.)
+pub const GDN_CHUNK_MIN_T: c_int = 256;
+
+/// Supported chunk sizes (one compiled kernel per size; names differ per C).
+pub const GDN_CHUNK_CS = [_]u32{ 32, 64, 128 };
+
+pub var gdn_chunk_c_override: ?u32 = null; // test seam
+var gdn_chunk_c_cached: ?u32 = null;
+pub fn gdnChunkC() u32 {
+    if (gdn_chunk_c_override) |v| return v;
+    if (gdn_chunk_c_cached) |v| return v;
+    const v: u32 = blk: {
+        const raw = std.c.getenv("MLX_SERVE_GDN_CHUNK_C") orelse break :blk 64;
+        const parsed = std.fmt.parseInt(u32, std.mem.sliceTo(raw, 0), 10) catch break :blk 64;
+        for (GDN_CHUNK_CS) |cand| {
+            if (cand == parsed) break :blk parsed;
+        }
+        break :blk 64;
+    };
+    gdn_chunk_c_cached = v;
+    return v;
+}
+
+/// Routing predicate: geometry + width gate (reuses the blocked kernel's
+/// contract; the chunked route is strictly narrower). seq_len must cover the
+/// chunk size — the test seam bypasses this, production does not.
+pub fn gdnChunkedEligible(seq_len: c_int, dk: c_int, dv: c_int, num_k_heads: c_int, num_v_heads: c_int) bool {
+    if (seq_len < GDN_CHUNK_MIN_T) return false;
+    return gdnBlockedEligible(seq_len, dk, dv, num_k_heads, num_v_heads);
+}
+
+/// Staging sub-block for fold/replay, input-width aware (mirrors the blocked
+/// kernel: f32 activations stage 2x the bytes and must clamp down).
+fn gdnChunkStagingTbFor(dk: c_int, in_elem_size: usize) ?u32 {
+    // Same budget as GDN_KERNEL_BLOCKED_BODY's staging: k_s+q_s [TB][Dk+8]
+    // (fold stages only k_s), v_s [TB][DB+8], g_s/b_s [TB].
+    return gdnBlockTFor(32, dk, in_elem_size);
+}
+
+// Phase A: per-chunk (A_c, B_c) via the augmented-basis recurrence.
+const GDN_CHUNK_KERNEL_FOLD_BODY =
+    \\constexpr int DB = 32;                             // columns (of Dk+Dv) per threadgroup
+    \\const int tid = thread_position_in_threadgroup.x;  // 0..255
+    \\const int tile = threadgroup_position_in_grid.x;   // (Dk+Dv)/DB
+    \\const int hv  = threadgroup_position_in_grid.y;
+    \\const int nz  = threadgroup_position_in_grid.z;    // b*NC + nc
+    \\const int b   = nz / NC;
+    \\const int nc  = nz % NC;
+    \\const int hk  = hv / (Hv / Hk);
+    \\const int col0 = tile * DB;
+    \\const bool a_part = (col0 < Dk);
+    \\const int t0  = nc * C;
+    \\const int tt  = min(C, T - t0);
+    \\
+    \\const int col = tid / 8;            // 0..31 (column within tile)
+    \\const int seg = tid % 8;            // 0..7
+    \\const int d0  = seg * 16;
+    \\
+    \\threadgroup InT k_s[TB][Dk + 8];
+    \\threadgroup InT v_s[TB][DB + 8];
+    \\threadgroup float g_s[TB];
+    \\threadgroup float b_s[TB];
+    \\
+    \\auto k_base = k + ((size_t)b * T * Hk + hk) * Dk;
+    \\auto v_base = v + ((size_t)b * T * Hv + hv) * Dv;
+    \\const size_t krow = (size_t)Hk * Dk;
+    \\const size_t vrow = (size_t)Hv * Dv;
+    \\
+    \\device float* A_out = A_c + ((size_t)(b * NC + nc) * Hv + hv) * Dk * Dk;
+    \\device float* B_out = B_c + ((size_t)(b * NC + nc) * Hv + hv) * Dk * Dv;
+    \\
+    \\// state init for this tile's 32 columns: identity for A-columns, zero
+    \\// for B-columns (their forcing comes from the real v).
+    \\float4 st[4];
+    \\for (int i = 0; i < 4; ++i) {
+    \\    const int base = d0 + 4 * i;
+    \\    const int g = col0 + col;
+    \\    st[i] = a_part
+    \\        ? float4(base + 0 == g ? 1.0f : 0.0f,
+    \\                 base + 1 == g ? 1.0f : 0.0f,
+    \\                 base + 2 == g ? 1.0f : 0.0f,
+    \\                 base + 3 == g ? 1.0f : 0.0f)
+    \\        : float4(0.0f);
+    \\}
+    \\
+    \\for (int tb0 = 0; tb0 < tt; tb0 += TB) {
+    \\    const int n = min(TB, tt - tb0);
+    \\    for (int p = tid; p < n * Dk; p += 256) {
+    \\        const int r = p / Dk, d = p % Dk;
+    \\        k_s[r][d] = static_cast<InT>(k_base[(size_t)(t0 + tb0 + r) * krow + d]);
+    \\    }
+    \\    if (!a_part) {
+    \\        for (int p = tid; p < n * DB; p += 256) {
+    \\            const int r = p / DB, d = p % DB;
+    \\            v_s[r][d] = static_cast<InT>(v_base[(size_t)(t0 + tb0 + r) * vrow + (col0 - Dk) + d]);
+    \\        }
+    \\    }
+    \\    for (int p = tid; p < n; p += 256) {
+    \\        g_s[p] = (float)g[((size_t)b * T + t0 + tb0 + p) * Hv + hv];
+    \\        b_s[p] = (float)beta[((size_t)b * T + t0 + tb0 + p) * Hv + hv];
+    \\    }
+    \\    threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\
+    \\    for (int t = 0; t < n; ++t) {
+    \\        const float gt = g_s[t];
+    \\        const float bt = b_s[t];
+    \\        const threadgroup vec<InT,4>* k4 = (const threadgroup vec<InT,4>*)&k_s[t][d0];
+    \\        float4 kf[4];
+    \\        for (int i = 0; i < 4; ++i) kf[i] = float4(k4[i]);
+    \\        float4 p4 = 0.0f;
+    \\        for (int i = 0; i < 4; ++i) { st[i] *= gt; p4 += st[i] * kf[i]; }
+    \\        float part = p4.x + p4.y + p4.z + p4.w;
+    \\        part += simd_shuffle_down(part, 4);
+    \\        part += simd_shuffle_down(part, 2);
+    \\        part += simd_shuffle_down(part, 1);
+    \\        const float kv_mem = simd_shuffle(part, (tid % 32) / 8 * 8);
+    \\        // A-columns: zero forcing; B-columns: the real v value.
+    \\        const float vcol = a_part ? 0.0f : (float)v_s[t][col];
+    \\        const float delta = (vcol - kv_mem) * bt;
+    \\        for (int i = 0; i < 4; ++i) st[i] += kf[i] * delta;
+    \\    }
+    \\    threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\}
+    \\
+    \\if (a_part) {
+    \\    const int g = col0 + col;
+    \\    device vec<float,4>* dst = (device vec<float,4>*)(A_out + (size_t)g * Dk + d0);
+    \\    for (int i = 0; i < 4; ++i) dst[i] = st[i];
+    \\} else {
+    \\    const int dv = col0 - Dk + col;
+    \\    for (int i = 0; i < 4; ++i) {
+    \\        B_out[(size_t)(d0 + 4 * i + 0) * Dv + dv] = st[i].x;
+    \\        B_out[(size_t)(d0 + 4 * i + 1) * Dv + dv] = st[i].y;
+    \\        B_out[(size_t)(d0 + 4 * i + 2) * Dv + dv] = st[i].z;
+    \\        B_out[(size_t)(d0 + 4 * i + 3) * Dv + dv] = st[i].w;
+    \\    }
+    \\}
+;
+
+// Phase B: chunk-boundary scan. Sequential over NC chunks; Dv rows are
+// independent so grid.x tiles them like the blocked kernel. Per chunk:
+//   M_s[dv][dk] holds the PRE state (transposed), then
+//   M_new^T[dv][dk_out] = sum_dk M_s[dv][dk] * A_c[dk_out][dk] + B_c[dk_out][dv]
+// via 4 tiled 16x32 A_c slices. No k/q/v staging — reads A_c/B_c only.
+const GDN_CHUNK_KERNEL_SCAN_BODY =
+    \\constexpr int DB = 32;
+    \\const int tid = thread_position_in_threadgroup.x;  // 0..255
+    \\const int blk = threadgroup_position_in_grid.x;    // Dv/DB
+    \\const int hv  = threadgroup_position_in_grid.y;
+    \\const int b   = threadgroup_position_in_grid.z;
+    \\const int dv0 = blk * DB;
+    \\const int dvr = tid / 8;
+    \\const int seg = tid % 8;
+    \\const int d0  = seg * 16;
+    \\
+    \\threadgroup float M_s[DB][Dk + 8];    // 32 dv rows x 128 dk (transposed state)
+    \\threadgroup float A_s[16][32];        // one 16x32 tile of A_c
+    \\
+    \\float4 st[4];
+    \\{
+    \\    const device vec<StT,4>* S_in = (const device vec<StT,4>*)(
+    \\        state_in + (((size_t)b * Hv + hv) * Dv + dv0 + dvr) * Dk + d0);
+    \\    for (int i = 0; i < 4; ++i) st[i] = float4(S_in[i]);
+    \\}
+    \\
+    \\for (int nc = 0; nc < NC; ++nc) {
+    \\    // store PRE state into M_s
+    \\    M_s[dvr][d0 + 0]  = st[0].x;  M_s[dvr][d0 + 1]  = st[0].y;
+    \\    M_s[dvr][d0 + 2]  = st[0].z;  M_s[dvr][d0 + 3]  = st[0].w;
+    \\    M_s[dvr][d0 + 4]  = st[1].x;  M_s[dvr][d0 + 5]  = st[1].y;
+    \\    M_s[dvr][d0 + 6]  = st[1].z;  M_s[dvr][d0 + 7]  = st[1].w;
+    \\    M_s[dvr][d0 + 8]  = st[2].x;  M_s[dvr][d0 + 9]  = st[2].y;
+    \\    M_s[dvr][d0 + 10] = st[2].z;  M_s[dvr][d0 + 11] = st[2].w;
+    \\    M_s[dvr][d0 + 12] = st[3].x;  M_s[dvr][d0 + 13] = st[3].y;
+    \\    M_s[dvr][d0 + 14] = st[3].z;  M_s[dvr][d0 + 15] = st[3].w;
+    \\    threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\
+    \\    float acc[16];
+    \\    for (int o = 0; o < 16; ++o) acc[o] = 0.0f;
+    \\    const device float* A_base = A_c + ((size_t)(b * NC + nc) * Hv + hv) * Dk * Dk;
+    \\    for (int dkt = 0; dkt < Dk / 32; ++dkt) {
+    \\        for (int p = tid; p < 16 * 32; p += 256) {
+    \\            const int o = p / 32, i = p % 32;
+    \\            A_s[o][i] = A_base[(size_t)(d0 + o) * Dk + dkt * 32 + i];
+    \\        }
+    \\        threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\        for (int o = 0; o < 16; ++o) {
+    \\            float s = 0.0f;
+    \\            for (int i = 0; i < 32; ++i) s += M_s[dvr][dkt * 32 + i] * A_s[o][i];
+    \\            acc[o] += s;
+    \\        }
+    \\        threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\    }
+    \\
+    \\    // add B_c column and write the POST state (transposed into [dv][dk])
+    \\    const device float* B_row = B_c + ((size_t)(b * NC + nc) * Hv + hv) * Dk * Dv + (dv0 + dvr);
+    \\    for (int i = 0; i < 4; ++i) {
+    \\        st[i] = float4(
+    \\            acc[4 * i + 0] + B_row[(size_t)(d0 + 4 * i + 0) * Dv],
+    \\            acc[4 * i + 1] + B_row[(size_t)(d0 + 4 * i + 1) * Dv],
+    \\            acc[4 * i + 2] + B_row[(size_t)(d0 + 4 * i + 2) * Dv],
+    \\            acc[4 * i + 3] + B_row[(size_t)(d0 + 4 * i + 3) * Dv]);
+    \\    }
+    \\    device float* M_out = M_seq + (((size_t)(b * NC + nc) * Hv + hv) * Dv + (dv0 + dvr)) * Dk + d0;
+    \\    for (int i = 0; i < 4; ++i) {
+    \\        M_out[4 * i + 0] = st[i].x;  M_out[4 * i + 1] = st[i].y;
+    \\        M_out[4 * i + 2] = st[i].z;  M_out[4 * i + 3] = st[i].w;
+    \\    }
+    \\    threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\}
+    \\
+    \\{
+    \\    device vec<StT,4>* S_out = (device vec<StT,4>*)(
+    \\        state_out + (((size_t)b * Hv + hv) * Dv + dv0 + dvr) * Dk + d0);
+    \\    for (int i = 0; i < 4; ++i) S_out[i] = vec<StT,4>(st[i]);
+    \\}
+;
+
+// Phase C: per-chunk output replay (parallel over chunks). The shipped
+// kernel's exact per-token order, re-indexed to chunk [nc*C, min(T,(nc+1)*C))
+// from the chunk's boundary state (M_seq[nc-1], or state_in for nc==0).
+const GDN_CHUNK_KERNEL_REPLAY_BODY =
+    \\constexpr int DB = 32;
+    \\const int tid = thread_position_in_threadgroup.x;  // 0..255
+    \\const int blk = threadgroup_position_in_grid.x;    // Dv/DB
+    \\const int hv  = threadgroup_position_in_grid.y;
+    \\const int nb  = threadgroup_position_in_grid.z;    // b*NC + nc
+    \\const int b   = nb / NC;
+    \\const int nc  = nb % NC;
+    \\const int hk  = hv / (Hv / Hk);
+    \\const int dv0 = blk * DB;
+    \\const int dvr = tid / 8;
+    \\const int seg = tid % 8;
+    \\const int d0  = seg * 16;
+    \\const int t0  = nc * C;
+    \\const int tt  = min(C, T - t0);
+    \\
+    \\threadgroup InT k_s[TB][Dk + 8];
+    \\threadgroup InT q_s[TB][Dk + 8];
+    \\threadgroup InT v_s[TB][DB + 8];
+    \\threadgroup float g_s[TB];
+    \\threadgroup float b_s[TB];
+    \\
+    \\auto k_base = k + ((size_t)b * T * Hk + hk) * Dk;
+    \\auto q_base = q + ((size_t)b * T * Hk + hk) * Dk;
+    \\auto v_base = v + ((size_t)b * T * Hv + hv) * Dv + dv0;
+    \\const size_t krow = (size_t)Hk * Dk;
+    \\
+    \\float4 st[4];
+    \\if (nc == 0) {
+    \\    const device vec<StT,4>* S_in = (const device vec<StT,4>*)(
+    \\        state_in + (((size_t)b * Hv + hv) * Dv + dv0 + dvr) * Dk + d0);
+    \\    for (int i = 0; i < 4; ++i) st[i] = float4(S_in[i]);
+    \\} else {
+    \\    const device vec<float,4>* S_in = (const device vec<float,4>*)(
+    \\        M_seq + (((size_t)b * NC + (nc - 1)) * Hv + hv) * Dv * Dk + (dv0 + dvr) * Dk + d0);
+    \\    for (int i = 0; i < 4; ++i) st[i] = S_in[i];
+    \\}
+    \\
+    \\device OutT* y_base = y + ((size_t)b * T * Hv + hv) * Dv + dv0;
+    \\
+    \\for (int tb0 = 0; tb0 < tt; tb0 += TB) {
+    \\    const int n = min(TB, tt - tb0);
+    \\    for (int p = tid; p < n * Dk; p += 256) {
+    \\        const int r = p / Dk, d = p % Dk;
+    \\        k_s[r][d] = static_cast<InT>(k_base[(size_t)(t0 + tb0 + r) * krow + d]);
+    \\        q_s[r][d] = static_cast<InT>(q_base[(size_t)(t0 + tb0 + r) * krow + d]);
+    \\    }
+    \\    for (int p = tid; p < n * DB; p += 256) {
+    \\        const int r = p / DB, d = p % DB;
+    \\        v_s[r][d] = static_cast<InT>(v_base[(size_t)(t0 + tb0 + r) * Hv * Dv + d]);
+    \\    }
+    \\    for (int p = tid; p < n; p += 256) {
+    \\        g_s[p] = (float)g[((size_t)b * T + t0 + tb0 + p) * Hv + hv];
+    \\        b_s[p] = (float)beta[((size_t)b * T + t0 + tb0 + p) * Hv + hv];
+    \\    }
+    \\    threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\
+    \\    for (int t = 0; t < n; ++t) {
+    \\        const float gt = g_s[t];
+    \\        const float bt = b_s[t];
+    \\        const threadgroup vec<InT,4>* k4 = (const threadgroup vec<InT,4>*)&k_s[t][d0];
+    \\        const threadgroup vec<InT,4>* q4 = (const threadgroup vec<InT,4>*)&q_s[t][d0];
+    \\        float4 kf[4];
+    \\        for (int i = 0; i < 4; ++i) kf[i] = float4(k4[i]);
+    \\        float4 p4 = 0.0f;
+    \\        for (int i = 0; i < 4; ++i) { st[i] *= gt; p4 += st[i] * kf[i]; }
+    \\        float part = p4.x + p4.y + p4.z + p4.w;
+    \\        part += simd_shuffle_down(part, 4);
+    \\        part += simd_shuffle_down(part, 2);
+    \\        part += simd_shuffle_down(part, 1);
+    \\        const float kv_mem = simd_shuffle(part, (tid % 32) / 8 * 8);
+    \\        const float delta = ((float)v_s[t][dvr] - kv_mem) * bt;
+    \\
+    \\        float4 o4 = 0.0f;
+    \\        for (int i = 0; i < 4; ++i) {
+    \\            st[i] += kf[i] * delta;
+    \\            o4 += st[i] * float4(q4[i]);
+    \\        }
+    \\        float out = o4.x + o4.y + o4.z + o4.w;
+    \\        out += simd_shuffle_down(out, 4);
+    \\        out += simd_shuffle_down(out, 2);
+    \\        out += simd_shuffle_down(out, 1);
+    \\        if (seg == 0) {
+    \\            y_base[(size_t)(t0 + tb0 + t) * Hv * Dv + dvr] = static_cast<OutT>(out);
+    \\        }
+    \\    }
+    \\    threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\}
+;
+
+fn gdnChunkFoldSource(comptime c: u32, comptime tb: u32) [:0]const u8 {
+    return std.fmt.comptimePrint("constexpr int C = {d};\nconstexpr int TB = {d};\n", .{ c, tb }) ++ GDN_CHUNK_KERNEL_FOLD_BODY;
+}
+
+fn gdnChunkScanSource(comptime c: u32) [:0]const u8 {
+    return std.fmt.comptimePrint("constexpr int C = {d};\n", .{c}) ++ GDN_CHUNK_KERNEL_SCAN_BODY;
+}
+
+fn gdnChunkReplaySource(comptime c: u32, comptime tb: u32) [:0]const u8 {
+    return std.fmt.comptimePrint("constexpr int C = {d};\nconstexpr int TB = {d};\n", .{ c, tb }) ++ GDN_CHUNK_KERNEL_REPLAY_BODY;
+}
+
+const GDN_CHUNK_TBS = [_]u32{ 16, 32, 48 };
+var gdn_chunk_fold_cache: [GDN_CHUNK_CS.len][GDN_CHUNK_TBS.len]?mlx.mlx_fast_metal_kernel = @splat(@splat(null));
+var gdn_chunk_scan_cache: [GDN_CHUNK_CS.len]?mlx.mlx_fast_metal_kernel = @splat(null);
+var gdn_chunk_replay_cache: [GDN_CHUNK_CS.len][GDN_CHUNK_TBS.len]?mlx.mlx_fast_metal_kernel = @splat(@splat(null));
+
+fn getGdnChunkFold(c: u32, tb: u32) !mlx.mlx_fast_metal_kernel {
+    inline for (GDN_CHUNK_CS, 0..) |cand, ci| {
+        if (cand == c) {
+            inline for (GDN_CHUNK_TBS, 0..) |tbcand, ti| {
+                if (tbcand == tb) {
+                    if (gdn_chunk_fold_cache[ci][ti]) |k| return k;
+                    const input_names = [_][*:0]const u8{ "k", "v", "g", "beta", "T", "NC" };
+                    const output_names = [_][*:0]const u8{ "A_c", "B_c" };
+                    const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+                    defer _ = mlx.mlx_vector_string_free(in_vec);
+                    const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+                    defer _ = mlx.mlx_vector_string_free(out_vec);
+                    const kernel = mlx.mlx_fast_metal_kernel_new(
+                        std.fmt.comptimePrint("gated_delta_chunk_fold_c{d}_tb{d}", .{ cand, tbcand }),
+                        in_vec,
+                        out_vec,
+                        gdnChunkFoldSource(cand, tbcand),
+                        "",
+                        true,
+                        false,
+                    );
+                    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+                    gdn_chunk_fold_cache[ci][ti] = kernel;
+                    return kernel;
+                }
+            }
+        }
+    }
+    return error.UnsupportedGdnChunkC;
+}
+
+fn getGdnChunkScan(c: u32) !mlx.mlx_fast_metal_kernel {
+    inline for (GDN_CHUNK_CS, 0..) |cand, ci| {
+        if (cand == c) {
+            if (gdn_chunk_scan_cache[ci]) |k| return k;
+            const input_names = [_][*:0]const u8{ "A_c", "B_c", "state_in", "NC" };
+            const output_names = [_][*:0]const u8{ "M_seq", "state_out" };
+            const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+            defer _ = mlx.mlx_vector_string_free(in_vec);
+            const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+            defer _ = mlx.mlx_vector_string_free(out_vec);
+            const kernel = mlx.mlx_fast_metal_kernel_new(
+                std.fmt.comptimePrint("gated_delta_chunk_scan_c{d}", .{cand}),
+                in_vec,
+                out_vec,
+                gdnChunkScanSource(cand),
+                "",
+                true,
+                false,
+            );
+            if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+            gdn_chunk_scan_cache[ci] = kernel;
+            return kernel;
+        }
+    }
+    return error.UnsupportedGdnChunkC;
+}
+
+fn getGdnChunkReplay(c: u32, tb: u32) !mlx.mlx_fast_metal_kernel {
+    inline for (GDN_CHUNK_CS, 0..) |cand, ci| {
+        if (cand == c) {
+            inline for (GDN_CHUNK_TBS, 0..) |tbcand, ti| {
+                if (tbcand == tb) {
+                    if (gdn_chunk_replay_cache[ci][ti]) |k| return k;
+                    const input_names = [_][*:0]const u8{ "q", "k", "v", "g", "beta", "M_seq", "state_in", "T", "NC" };
+                    const output_names = [_][*:0]const u8{"y"};
+                    const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+                    defer _ = mlx.mlx_vector_string_free(in_vec);
+                    const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+                    defer _ = mlx.mlx_vector_string_free(out_vec);
+                    const kernel = mlx.mlx_fast_metal_kernel_new(
+                        std.fmt.comptimePrint("gated_delta_chunk_replay_c{d}_tb{d}", .{ cand, tbcand }),
+                        in_vec,
+                        out_vec,
+                        gdnChunkReplaySource(cand, tbcand),
+                        "",
+                        true,
+                        false,
+                    );
+                    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+                    gdn_chunk_replay_cache[ci][ti] = kernel;
+                    return kernel;
+                }
+            }
+        }
+    }
+    return error.UnsupportedGdnChunkC;
+}
+
 // ── Verify-width split-K quantized matmul (spec-decode fast path) ──
 //
 // Stock MLX qmm is tuned for M=1 decode (qmv) and large-M prefill (steel);
@@ -39030,6 +39501,104 @@ fn maxAbsDiff(a: []const f32, b: []const f32) f32 {
     return m;
 }
 
+/// Run the chunked prefill pipeline (fold -> scan -> replay) and return BOTH
+/// outputs (y, state_out). Mirrors gdnRunYState's dtype/config conventions.
+/// Dk must be 128 and Dv a multiple of 32 (the blocked kernel's contract).
+fn gdnRunYStateChunked(q: mlx.mlx_array, k: mlx.mlx_array, v: mlx.mlx_array, g: mlx.mlx_array, beta: mlx.mlx_array, state_in: mlx.mlx_array, B: c_int, T: c_int, Hk: c_int, Hv: c_int, Dk: c_int, Dv: c_int, s: mlx.mlx_stream) !GdnRunOut {
+    const in_dtype = mlx.mlx_array_dtype(q);
+    const st_dtype = mlx.mlx_array_dtype(state_in);
+    const c = gdnChunkC();
+    const tb = gdnChunkStagingTbFor(Dk, mlx.mlx_array_itemsize(q)) orelse return error.GdnChunkedDeclined;
+    const NC: c_int = @divTrunc(T + @as(c_int, @intCast(c)) - 1, @as(c_int, @intCast(c)));
+
+    const T_scalar = mlx.mlx_array_new_int(T);
+    defer _ = mlx.mlx_array_free(T_scalar);
+    const NC_scalar = mlx.mlx_array_new_int(NC);
+    defer _ = mlx.mlx_array_free(NC_scalar);
+
+    // ── Phase A: fold → (A_c, B_c) ──
+    const Ac_shape = [_]c_int{ B, NC, Hv, Dk, Dk };
+    const Bc_shape = [_]c_int{ B, NC, Hv, Dk, Dv };
+    const fold_config = mlx.mlx_fast_metal_kernel_config_new();
+    defer _ = mlx.mlx_fast_metal_kernel_config_free(fold_config);
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(fold_config, &Ac_shape, 5, .float32));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(fold_config, &Bc_shape, 5, .float32));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(fold_config, @divExact(Dk + Dv, 32), Hv, B * NC));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(fold_config, 256, 1, 1));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(fold_config, "InT", in_dtype));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(fold_config, "Dk", Dk));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(fold_config, "Dv", Dv));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(fold_config, "Hk", Hk));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(fold_config, "Hv", Hv));
+
+    const fold_inputs_arr = [_]mlx.mlx_array{ k, v, g, beta, T_scalar, NC_scalar };
+    const fold_inputs = mlx.mlx_vector_array_new_data(&fold_inputs_arr, fold_inputs_arr.len);
+    defer _ = mlx.mlx_vector_array_free(fold_inputs);
+    var fold_outs = mlx.mlx_vector_array_new();
+    defer _ = mlx.mlx_vector_array_free(fold_outs);
+    try mlx.check(mlx.mlx_fast_metal_kernel_apply(&fold_outs, try getGdnChunkFold(c, tb), fold_inputs, fold_config, s));
+    if (mlx.mlx_vector_array_size(fold_outs) != 2) return error.MetalKernelBadOutputCount;
+    var Ac = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(Ac);
+    var Bc = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(Bc);
+    try mlx.check(mlx.mlx_vector_array_get(&Ac, fold_outs, 0));
+    try mlx.check(mlx.mlx_vector_array_get(&Bc, fold_outs, 1));
+
+    // ── Phase B: scan → (M_seq, state_out) ──
+    const Mseq_shape = [_]c_int{ B, NC, Hv, Dv, Dk };
+    const so_shape = [_]c_int{ B, Hv, Dv, Dk };
+    const scan_config = mlx.mlx_fast_metal_kernel_config_new();
+    defer _ = mlx.mlx_fast_metal_kernel_config_free(scan_config);
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(scan_config, &Mseq_shape, 5, .float32));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(scan_config, &so_shape, 4, .bfloat16));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(scan_config, 256 * @divExact(Dv, 32), Hv, B));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(scan_config, 256, 1, 1));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(scan_config, "StT", st_dtype));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(scan_config, "Dk", Dk));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(scan_config, "Dv", Dv));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(scan_config, "Hv", Hv));
+
+    const scan_inputs_arr = [_]mlx.mlx_array{ Ac, Bc, state_in, NC_scalar };
+    const scan_inputs = mlx.mlx_vector_array_new_data(&scan_inputs_arr, scan_inputs_arr.len);
+    defer _ = mlx.mlx_vector_array_free(scan_inputs);
+    var scan_outs = mlx.mlx_vector_array_new();
+    defer _ = mlx.mlx_vector_array_free(scan_outs);
+    try mlx.check(mlx.mlx_fast_metal_kernel_apply(&scan_outs, try getGdnChunkScan(c), scan_inputs, scan_config, s));
+    if (mlx.mlx_vector_array_size(scan_outs) != 2) return error.MetalKernelBadOutputCount;
+    var Mseq = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(Mseq);
+    var state_out = mlx.mlx_array_new();
+    try mlx.check(mlx.mlx_vector_array_get(&Mseq, scan_outs, 0));
+    try mlx.check(mlx.mlx_vector_array_get(&state_out, scan_outs, 1));
+
+    // ── Phase C: replay → y ──
+    const y_shape = [_]c_int{ B, T, Hv, Dv };
+    const replay_config = mlx.mlx_fast_metal_kernel_config_new();
+    defer _ = mlx.mlx_fast_metal_kernel_config_free(replay_config);
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(replay_config, &y_shape, 4, .bfloat16));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(replay_config, 256 * @divExact(Dv, 32), Hv, B * NC));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(replay_config, 256, 1, 1));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(replay_config, "InT", in_dtype));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(replay_config, "StT", st_dtype));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(replay_config, "OutT", .bfloat16));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(replay_config, "Dk", Dk));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(replay_config, "Dv", Dv));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(replay_config, "Hk", Hk));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(replay_config, "Hv", Hv));
+
+    const replay_inputs_arr = [_]mlx.mlx_array{ q, k, v, g, beta, Mseq, state_in, T_scalar, NC_scalar };
+    const replay_inputs = mlx.mlx_vector_array_new_data(&replay_inputs_arr, replay_inputs_arr.len);
+    defer _ = mlx.mlx_vector_array_free(replay_inputs);
+    var replay_outs = mlx.mlx_vector_array_new();
+    defer _ = mlx.mlx_vector_array_free(replay_outs);
+    try mlx.check(mlx.mlx_fast_metal_kernel_apply(&replay_outs, try getGdnChunkReplay(c, tb), replay_inputs, replay_config, s));
+    if (mlx.mlx_vector_array_size(replay_outs) != 1) return error.MetalKernelBadOutputCount;
+    var yo = mlx.mlx_array_new();
+    try mlx.check(mlx.mlx_vector_array_get(&yo, replay_outs, 0));
+    return .{ .y = yo, .state = state_out };
+}
+
 /// `in_dtype` is the ACTIVATION width q/k/v arrive in. bf16 is the common
 /// case; an f16 checkpoint promotes its activations to f32 (f16 ⊕ f32 scalar),
 /// which is a different kernel specialization AND a different threadgroup
@@ -39147,6 +39716,270 @@ fn gdnBlockedParityCase(case: GdnCase, s: mlx.mlx_stream) !void {
         );
         return error.GdnBlockedParityFailed;
     }
+}
+
+/// Runs one geometry through host ref + stock + chunked and asserts the
+/// chunked pipeline is no less accurate than the stock kernel it replaces,
+/// vs the f64 ground truth (the repo house rule, same bar as the blocked
+/// kernel). `case.tb` is unused here (chunk size comes from gdnChunkC()).
+fn gdnChunkedParityCase(case: GdnCase, s: mlx.mlx_stream) !void {
+    const al = testing.allocator;
+    const B = case.B;
+    const T = case.T;
+    const Hk = case.Hk;
+    const Hv = case.Hv;
+    const Dk: c_int = 128;
+    const Dv = case.Dv;
+    const qn: usize = @intCast(B * T * Hk * Dk);
+    const vn: usize = @intCast(B * T * Hv * Dv);
+    const gn: usize = @intCast(B * T * Hv);
+    const sn: usize = @intCast(B * Hv * Dv * Dk);
+
+    var prng = std.Random.DefaultPrng.init(0xC7B0C5ED);
+    const rnd = prng.random();
+    const qd = try al.alloc(f32, qn);
+    defer al.free(qd);
+    const kd = try al.alloc(f32, qn);
+    defer al.free(kd);
+    const vd = try al.alloc(f32, vn);
+    defer al.free(vd);
+    const gd = try al.alloc(f32, gn);
+    defer al.free(gd);
+    const bd = try al.alloc(f32, gn);
+    defer al.free(bd);
+    const sd = try al.alloc(f32, sn);
+    defer al.free(sd);
+    for (qd) |*x| x.* = bf16Trunc(rnd.float(f32) - 0.5);
+    for (kd) |*x| x.* = bf16Trunc(rnd.float(f32) - 0.5);
+    for (vd) |*x| x.* = bf16Trunc(rnd.float(f32) - 0.5);
+    for (gd) |*x| x.* = bf16Trunc(0.5 + 0.4 * rnd.float(f32));
+    for (bd) |*x| x.* = bf16Trunc(rnd.float(f32));
+    for (sd) |*x| x.* = bf16Trunc(rnd.float(f32) - 0.5);
+
+    const ref = try gdnHostRef(al, qd, kd, vd, gd, bd, sd, @intCast(B), @intCast(T), @intCast(Hk), @intCast(Hv), @intCast(Dk), @intCast(Dv));
+    defer al.free(ref.y);
+    defer al.free(ref.state);
+
+    const qsh = [_]c_int{ B, T, Hk, Dk };
+    const vsh = [_]c_int{ B, T, Hv, Dv };
+    const gsh = [_]c_int{ B, T, Hv };
+    const ssh = [_]c_int{ B, Hv, Dv, Dk };
+    const q32 = mlx.mlx_array_new_data(qd.ptr, &qsh, 4, .float32);
+    defer _ = mlx.mlx_array_free(q32);
+    const k32 = mlx.mlx_array_new_data(kd.ptr, &qsh, 4, .float32);
+    defer _ = mlx.mlx_array_free(k32);
+    const v32 = mlx.mlx_array_new_data(vd.ptr, &vsh, 4, .float32);
+    defer _ = mlx.mlx_array_free(v32);
+    const g32 = mlx.mlx_array_new_data(gd.ptr, &gsh, 3, .float32);
+    defer _ = mlx.mlx_array_free(g32);
+    const b32 = mlx.mlx_array_new_data(bd.ptr, &gsh, 3, .float32);
+    defer _ = mlx.mlx_array_free(b32);
+    const st32 = mlx.mlx_array_new_data(sd.ptr, &ssh, 4, .float32);
+    defer _ = mlx.mlx_array_free(st32);
+
+    var q = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(q);
+    var kk = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(kk);
+    var v = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(v);
+    var g = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(g);
+    var beta = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(beta);
+    var st = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(st);
+    try mlx.check(mlx.mlx_astype(&q, q32, case.in_dtype, s));
+    try mlx.check(mlx.mlx_astype(&kk, k32, case.in_dtype, s));
+    try mlx.check(mlx.mlx_astype(&v, v32, case.in_dtype, s));
+    try mlx.check(mlx.mlx_astype(&g, g32, .bfloat16, s));
+    try mlx.check(mlx.mlx_astype(&beta, b32, case.in_dtype, s));
+    try mlx.check(mlx.mlx_astype(&st, st32, .bfloat16, s));
+
+    const stock = try gdnRunYState(false, 16, q, kk, v, g, beta, st, B, T, Hk, Hv, Dk, Dv, s);
+    defer _ = mlx.mlx_array_free(stock.y);
+    defer _ = mlx.mlx_array_free(stock.state);
+    const chunked = try gdnRunYStateChunked(q, kk, v, g, beta, st, B, T, Hk, Hv, Dk, Dv, s);
+    defer _ = mlx.mlx_array_free(chunked.y);
+    defer _ = mlx.mlx_array_free(chunked.state);
+
+    const stock_y = try evalToF32(al, stock.y, vn, s);
+    defer al.free(stock_y);
+    const stock_st = try evalToF32(al, stock.state, sn, s);
+    defer al.free(stock_st);
+    const chk_y = try evalToF32(al, chunked.y, vn, s);
+    defer al.free(chk_y);
+    const chk_st = try evalToF32(al, chunked.state, sn, s);
+    defer al.free(chk_st);
+
+    const stock_y_err = maxAbsDiff(stock_y, ref.y);
+    const stock_st_err = maxAbsDiff(stock_st, ref.state);
+    const chk_y_err = maxAbsDiff(chk_y, ref.y);
+    const chk_st_err = maxAbsDiff(chk_st, ref.state);
+    if (chk_y_err > 1.5 * stock_y_err + 0.02 or chk_st_err > 1.5 * stock_st_err + 0.02) {
+        std.debug.print(
+            "GDN chunked parity FAIL (B={d} T={d} Hk={d} Hv={d} Dv={d} C={d}): y {d:.5} vs stock {d:.5}, state {d:.5} vs stock {d:.5}\\n",
+            .{ case.B, case.T, case.Hk, case.Hv, case.Dv, gdnChunkC(), chk_y_err, stock_y_err, chk_st_err, stock_st_err },
+        );
+        return error.GdnChunkedParityFailed;
+    }
+}
+
+test "GDN chunked pipeline: no worse than stock vs f64 ground truth (T/GQA/Dv/dtype sweep)" {
+    const s = mlx.gpuStream();
+    gdn_chunk_c_override = 64;
+    defer gdn_chunk_c_override = null;
+    // T hits non-multiples of C=64 (ragged tails); Hk<Hv exercises GQA;
+    // Dv 32..128 exercises 1..4 DB blocks; f32/f16 cover the activation-width
+    // specializations (f32 clamps the fold/replay staging to TB=16).
+    const cases = [_]GdnCase{
+        .{ .B = 1, .T = 130, .Hk = 2, .Hv = 4, .Dv = 128, .tb = 32 },
+        .{ .B = 2, .T = 100, .Hk = 1, .Hv = 2, .Dv = 32, .tb = 32 },
+        .{ .B = 1, .T = 65, .Hk = 1, .Hv = 2, .Dv = 64, .tb = 16 },
+        .{ .B = 1, .T = 200, .Hk = 2, .Hv = 4, .Dv = 128, .tb = 32, .in_dtype = .float32 },
+        .{ .B = 1, .T = 200, .Hk = 2, .Hv = 4, .Dv = 64, .tb = 32, .in_dtype = .float16 },
+    };
+    for (cases) |case| try gdnChunkedParityCase(case, s);
+}
+
+test "GDN chunked pipeline: chunk-boundary continuity (split run == full run)" {
+    const s = mlx.gpuStream();
+    const al = testing.allocator;
+    gdn_chunk_c_override = 64;
+    defer gdn_chunk_c_override = null;
+    const B: c_int = 1;
+    const T: c_int = 130;
+    const T1: c_int = 64; // a chunk boundary (and non-multiple of TB)
+    const Hk: c_int = 2;
+    const Hv: c_int = 4;
+    const Dk: c_int = 128;
+    const Dv: c_int = 64;
+    const qn: usize = @intCast(B * T * Hk * Dk);
+    const vn: usize = @intCast(B * T * Hv * Dv);
+    const gn: usize = @intCast(B * T * Hv);
+    const sn: usize = @intCast(B * Hv * Dv * Dk);
+
+    var prng = std.Random.DefaultPrng.init(0x5EC0DD);
+    const rnd = prng.random();
+    const qd = try al.alloc(f32, qn);
+    defer al.free(qd);
+    const kd = try al.alloc(f32, qn);
+    defer al.free(kd);
+    const vd = try al.alloc(f32, vn);
+    defer al.free(vd);
+    const gd = try al.alloc(f32, gn);
+    defer al.free(gd);
+    const bd = try al.alloc(f32, gn);
+    defer al.free(bd);
+    const sd = try al.alloc(f32, sn);
+    defer al.free(sd);
+    for (qd) |*x| x.* = bf16Trunc(rnd.float(f32) - 0.5);
+    for (kd) |*x| x.* = bf16Trunc(rnd.float(f32) - 0.5);
+    for (vd) |*x| x.* = bf16Trunc(rnd.float(f32) - 0.5);
+    for (gd) |*x| x.* = bf16Trunc(0.5 + 0.4 * rnd.float(f32));
+    for (bd) |*x| x.* = bf16Trunc(rnd.float(f32));
+    for (sd) |*x| x.* = bf16Trunc(rnd.float(f32) - 0.5);
+
+    const qsh = [_]c_int{ B, T, Hk, Dk };
+    const vsh = [_]c_int{ B, T, Hv, Dv };
+    const gsh = [_]c_int{ B, T, Hv };
+    const ssh = [_]c_int{ B, Hv, Dv, Dk };
+    const q32 = mlx.mlx_array_new_data(qd.ptr, &qsh, 4, .float32);
+    defer _ = mlx.mlx_array_free(q32);
+    const k32 = mlx.mlx_array_new_data(kd.ptr, &qsh, 4, .float32);
+    defer _ = mlx.mlx_array_free(k32);
+    const v32 = mlx.mlx_array_new_data(vd.ptr, &vsh, 4, .float32);
+    defer _ = mlx.mlx_array_free(v32);
+    const g32 = mlx.mlx_array_new_data(gd.ptr, &gsh, 3, .float32);
+    defer _ = mlx.mlx_array_free(g32);
+    const b32 = mlx.mlx_array_new_data(bd.ptr, &gsh, 3, .float32);
+    defer _ = mlx.mlx_array_free(b32);
+    const st32 = mlx.mlx_array_new_data(sd.ptr, &ssh, 4, .float32);
+    defer _ = mlx.mlx_array_free(st32);
+
+    var q = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(q);
+    var kk = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(kk);
+    var v = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(v);
+    var g = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(g);
+    var beta = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(beta);
+    var st = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(st);
+    try mlx.check(mlx.mlx_astype(&q, q32, .bfloat16, s));
+    try mlx.check(mlx.mlx_astype(&kk, k32, .bfloat16, s));
+    try mlx.check(mlx.mlx_astype(&v, v32, .bfloat16, s));
+    try mlx.check(mlx.mlx_astype(&g, g32, .bfloat16, s));
+    try mlx.check(mlx.mlx_astype(&beta, b32, .bfloat16, s));
+    try mlx.check(mlx.mlx_astype(&st, st32, .bfloat16, s));
+
+    const full = try gdnRunYStateChunked(q, kk, v, g, beta, st, B, T, Hk, Hv, Dk, Dv, s);
+    defer _ = mlx.mlx_array_free(full.y);
+    defer _ = mlx.mlx_array_free(full.state);
+
+    // Split run: [0, T1) then [T1, T), carrying the bf16 state — exactly what
+    // chunked prefill does between forwardWith chunks.
+    const strides4 = [_]c_int{ 1, 1, 1, 1 };
+    const strides3 = [_]c_int{ 1, 1, 1 };
+    var q1 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(q1);
+    var k1 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(k1);
+    var v1 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(v1);
+    var g1 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(g1);
+    var b1 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(b1);
+    try mlx.check(mlx.mlx_slice(&q1, q, &[_]c_int{ 0, 0, 0, 0 }, 4, &[_]c_int{ B, T1, Hk, Dk }, 4, &strides4, 4, s));
+    try mlx.check(mlx.mlx_slice(&k1, kk, &[_]c_int{ 0, 0, 0, 0 }, 4, &[_]c_int{ B, T1, Hk, Dk }, 4, &strides4, 4, s));
+    try mlx.check(mlx.mlx_slice(&v1, v, &[_]c_int{ 0, 0, 0, 0 }, 4, &[_]c_int{ B, T1, Hv, Dv }, 4, &strides4, 4, s));
+    try mlx.check(mlx.mlx_slice(&g1, g, &[_]c_int{ 0, 0, 0 }, 3, &[_]c_int{ B, T1, Hv }, 3, &strides3, 3, s));
+    try mlx.check(mlx.mlx_slice(&b1, beta, &[_]c_int{ 0, 0, 0 }, 3, &[_]c_int{ B, T1, Hv }, 3, &strides3, 3, s));
+    var q2 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(q2);
+    var k2 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(k2);
+    var v2 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(v2);
+    var g2 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(g2);
+    var b2 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(b2);
+    try mlx.check(mlx.mlx_slice(&q2, q, &[_]c_int{ 0, T1, 0, 0 }, 4, &[_]c_int{ B, T, Hk, Dk }, 4, &strides4, 4, s));
+    try mlx.check(mlx.mlx_slice(&k2, kk, &[_]c_int{ 0, T1, 0, 0 }, 4, &[_]c_int{ B, T, Hk, Dk }, 4, &strides4, 4, s));
+    try mlx.check(mlx.mlx_slice(&v2, v, &[_]c_int{ 0, T1, 0, 0 }, 4, &[_]c_int{ B, T, Hv, Dv }, 4, &strides4, 4, s));
+    try mlx.check(mlx.mlx_slice(&g2, g, &[_]c_int{ 0, T1, 0 }, 3, &[_]c_int{ B, T, Hv }, 3, &strides3, 3, s));
+    try mlx.check(mlx.mlx_slice(&b2, beta, &[_]c_int{ 0, T1, 0 }, 3, &[_]c_int{ B, T, Hv }, 3, &strides3, 3, s));
+
+    const part1 = try gdnRunYStateChunked(q1, k1, v1, g1, b1, st, B, T1, Hk, Hv, Dk, Dv, s);
+    defer _ = mlx.mlx_array_free(part1.y);
+    defer _ = mlx.mlx_array_free(part1.state);
+    const part2 = try gdnRunYStateChunked(q2, k2, v2, g2, b2, part1.state, B, T - T1, Hk, Hv, Dk, Dv, s);
+    defer _ = mlx.mlx_array_free(part2.y);
+    defer _ = mlx.mlx_array_free(part2.state);
+
+    const full_st = try evalToF32(al, full.state, sn, s);
+    defer al.free(full_st);
+    const split_st = try evalToF32(al, part2.state, sn, s);
+    defer al.free(split_st);
+    var max_mag: f32 = 0;
+    for (full_st) |x| max_mag = @max(max_mag, @abs(x));
+    const tol = 0.02 * max_mag + 0.02;
+    try testing.expect(maxAbsDiff(full_st, split_st) < tol);
+
+    var y_tail = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(y_tail);
+    try mlx.check(mlx.mlx_slice(&y_tail, full.y, &[_]c_int{ 0, T1, 0, 0 }, 4, &[_]c_int{ B, T, Hv, Dv }, 4, &strides4, 4, s));
+    const n2: usize = @intCast(B * (T - T1) * Hv * Dv);
+    const tail_f = try evalToF32(al, y_tail, n2, s);
+    defer al.free(tail_f);
+    const part2_y = try evalToF32(al, part2.y, n2, s);
+    defer al.free(part2_y);
+    try testing.expect(maxAbsDiff(tail_f, part2_y) < tol);
 }
 
 test "GDN blocked-seq kernel: no worse than stock vs f64 ground truth (T/GQA/Dv/TB sweep)" {
