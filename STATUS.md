@@ -1,4 +1,4 @@
-# STATUS — prefill optimization (GDN chunkwise + HC up+mix + MoE down+reduce + MoE gate/up+GeGLU)
+# STATUS — prefill optimization (GDN chunkwise + HC up+mix + MoE down+reduce + MoE gate/up+GeGLU + grouped-QSA gather)
 
 - **Branch:** `arena/01a08be3-mlx-serve` (pushed to origin `nikolai-vysotskyi/mlx-serve`)
 - **HEAD:** see `git log -1` (after each push); ancestry …d8f4b77 → fe2de89 →
@@ -91,12 +91,33 @@ prefix-cache 0, MTP off). Target M5 Max 128 GB; agent runs cloud Linux
   write+group-norm chain"` (write exact, norm within the ulp bar, WR=0 arm,
   gate-off + H%256 declines). (Not run on Metal.)
 
+### Grouped-query QSA gather (Lever G, cross-token block reuse)
+- `msv_attn_qsa256_grp` kernel (`ATTN_QSA256_GROUP_SOURCE` inline in
+  `src/transformer.zig`) + `getAttnQsa256GroupKernel` + `qsaGroupEnabled/G` +
+  `qsaGroupEligible` + the `use_group` dispatch arm and `QsaGroupCfgKey` cache
+  in `gatherQsa256`. Gated `MLX_SERVE_QSA_GROUP=1` (default off),
+  `MLX_SERVE_QSA_GROUP_G` (default 4); `BK % RATIO == 0` + `32*NSG*G <= 256`.
+- One threadgroup per (group of G adjacent tokens, kv-head, batch): redundant
+  per-thread k-way merge of the G sorted selections into a union; each distinct
+  block staged once with a per-token row count (RATIO / tail_rows / 0); every
+  token reads the same staged K/V tile; per-token online softmax stays
+  per-row/per-simdgroup. Uses `SENTINEL = 2147483647` (no bare `INT_MAX`, like
+  the QSA select kernel) + the stock `ATTN256_KERNEL_HEADER` mma primitives +
+  `static_assert`s for the two gates. Grid `⌈qL/G⌉·32 × Hkv·NSG·G × B`.
+- `research/qsa_group_reference.py` PASS: union→per-token sequences EXACT for
+  every group (incl. partial last group + tail-block/selected-block overlap);
+  fp32 attention grouped==stock==exact (max 8.2e-08, grouped−stock 0.0).
+- Tests added: `gatherQsa256 grouped: matches the single-token gather and the
+  composed reference` (grp vs `attn256Reference` within the stock bar; grp vs
+  stock < 1e-2) + `gatherQsa256 grouped: geometry gate`. (Not run on Metal.)
+
 ### Zig validation (runs here)
-- Whole-file `zig ast-check` clean (only the 12 pre-existing
-  `@backingInt`/`@fromBackingInt` invalid-builtin notes, unchanged); isolated
-  semantic type-checks EXIT=0 for the new GDN prefill gate + the MoE gateup
-  wiring guard + the HC write+norm kernel/wiring/test against the `/tmp/zchk`
-  mlx stub.
+- Whole-file `zig ast-check` clean apart from the pre-existing
+  `@backingInt`/`@fromBackingInt` invalid-builtin notes (24 hits, unchanged);
+  isolated semantic type-checks EXIT=0 for the new GDN prefill gate + the MoE
+  gateup wiring guard + the HC write+norm kernel/wiring/test + the grouped-QSA
+  gate/helpers/dispatch (`gatherQsa256` `use_group` arm, `QsaGroupCfgKey`,
+  `getAttnQsa256GroupKernel`) against the `/tmp/zchk` mlx stub.
 
 ## Not done / blocked
 - **NOT built / run on Metal.** MSL compile + `zig build test` need Apple
@@ -117,8 +138,12 @@ prefix-cache 0, MTP off). Target M5 Max 128 GB; agent runs cloud Linux
 Claimed so far: GDN chunkwise (25%) + GDN prework/norm-gate prefill fusion
 (part of the GDN 25% + its proj/epilogue) + HC up-mix (part of 15%) + HC
 write+group-norm (part of 15%) + MoE down+reduce (small) + MoE gate/up+GeGLU
-fusion (part of ~35%, plain-SIMD).
-Remaining: attention/QSA reuse (~23%; grouped-query block-reuse, not
-re-counting the upstream gather/score), a NAX perf pass for the MoE gate/up
-and HC up-mix GEMMs (the current ports are plain-SIMD and will need it to
-matter at prefill scale). None of the individual levers reaches 1.5× alone.
+fusion (part of ~35%, plain-SIMD) + grouped-query QSA gather (part of ~23%,
+block reuse).
+Remaining: attention/QSA grouped-query block-reuse is now implemented (Lever
+G); still open is whether the gather is HBM-bound at all (measure per-block
+reads on M5 before betting on the ~G× staging win), a NAX perf pass for the
+MoE gate/up and HC up-mix GEMMs (the current ports are plain-SIMD and will
+need it to matter at prefill scale), and possibly a G>4 / NAX-form grouped
+gather if the profile calls for it. None of the individual levers reaches 1.5×
+alone.
