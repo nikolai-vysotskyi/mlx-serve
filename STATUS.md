@@ -1,8 +1,8 @@
 # STATUS — chunkwise GDN prefill (rank-1 fold / scan / replay)
 
 - **Branch:** `arena/01a08be3-mlx-serve` (pushed to origin `nikolai-vysotskyi/mlx-serve`)
-- **HEAD:** `62eac76` — "fix: chunked-GDN fold A_c transpose + grid threads; add kernel index sim"
-  (ancestry: c9abf8c → c877bc7 → c47728f → f41d2f0 → 62eac76)
+- **HEAD:** `3fb11fc` — "docs: record rank-1 fold impl + kernel index sim + two fixed Metal bugs"
+  (ancestry: c9abf8c → c877bc7 → c47728f → f41d2f0 → 62eac76 → 3fb11fc)
 - **Date:** 2026-09-10 (UTC). Evidence levels: hypothesis / reference test /
   component result on named hardware / full-model M5 A/B.
 
