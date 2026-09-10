@@ -70,6 +70,29 @@ prefix-cache 0, MTP off). Target M5 Max 128 GB; agent runs cloud Linux
   the composed chain (+ prefill gate)"` — q/k/v/conv_state/g/beta == composed
   chain at S=10/64; S>9 declines without the opt-in. (Not run on Metal.)
 
+### MoE/HC dequant numerics vs MLX (this session, source-verified)
+- MLX's 4-bit affine kernels dequant THREE ways (mlx/backend/metal/kernels/
+  quantized.h): `qdot` (the qmv/qmm "fast" path — nibble-digit trick,
+  `return scale*accum + sum*bias` with `accum = Σ x_shifted·digit`, i.e. an
+  EXACT raw-nibble dot then ONE scale/bias), `qouter` (per-term
+  `x·(q·scale+bias)`, the steel/NAX path), and `dequantize` (explicit
+  `scale*q+bias` tile decode). `affine_gather_qmm_n` / `affine_qmm_n` use
+  **`qdot`** — so stock gather_qmm is the nibble trick, NOT per-term
+  dequant.
+- The repo's MoE gate/up (Lever D) and HC up-mix (Lever B) GEMMs use the
+  per-term `q*scale+bias` (qouter-style) form, so they are **"no worse than
+  stock" but not bit-exact vs stock gather_qmm** — expect ~1e-3 parity-test
+  deltas on the first Metal run (the composed chain the tests compare against
+  is stock gather_qmm, which is qdot). This is the accepted bf16-precision
+  class, but the M5 validator should NOT chase those deltas as kernel bugs.
+- **NAX dead-end confirmed at the source level**: NAX cooperative MMA needs
+  bf16 operands (a 4th rounding class after qdot/qouter/dequantize), so it
+  cannot reproduce stock gather_qmm; do not attempt NAX for MoE gate/up or HC
+  up-mix without first pinning which MLX kernel the shape actually dispatches
+  to. The 4-bit verify-QMM family here (`vqmm*`) already uses the exact qdot
+  nibble trick (activations pre-scaled /1,/16,/256,/4096) — that is the
+  bit-exact form to port if a tighter MoE parity is ever wanted.
+
 ### MoE gate/up correctness guard (this session)
 - The `do_sort` wiring now fuses only when `hidden_act == silu` **and**
   `swiglu_limit <= 0` **and** no per-expert gate/up bias. The kernel bakes in
