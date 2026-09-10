@@ -17468,24 +17468,29 @@ pub const Transformer = struct {
         defer _ = mlx.mlx_array_free(down);
         const act = (try applyClosure(self.compiled_hc_silu, &.{down})) orelse try self.silu(down);
         defer _ = mlx.mlx_array_free(act);
-        const up = try self.qmatmul(act, w.up_w, w.up_s, w.up_b);
-        defer _ = mlx.mlx_array_free(up);
-        const shape4 = [_]c_int{ batch, seq_len, hc, hidden };
-        var up4 = mlx.mlx_array_new();
-        defer _ = mlx.mlx_array_free(up4);
-        try mlx.check(mlx.mlx_reshape(&up4, up, &shape4, 4, self.s));
+        const uqp = self.quantParamsFor(w.up_w, w.up_s);
         var mixed: mlx.mlx_array = undefined;
-        if (try applyClosure(self.compiled_hc_mix, &.{ up4, n4 })) |m| {
+        if (try hcUpMixFused(self.s, act, n4, w.up_w, w.up_s, w.up_b, batch, seq_len, hc, hidden, uqp.bits, uqp.group_size)) |m| {
             mixed = m;
         } else {
-            var mix = mlx.mlx_array_new();
-            defer _ = mlx.mlx_array_free(mix);
-            try mlx.check(mlx.mlx_sigmoid(&mix, up4, self.s));
-            var prod = mlx.mlx_array_new();
-            defer _ = mlx.mlx_array_free(prod);
-            try mlx.check(mlx.mlx_multiply(&prod, mix, n4, self.s));
-            mixed = mlx.mlx_array_new();
-            try mlx.check(mlx.mlx_mean_axis(&mixed, prod, 2, false, self.s));
+            const up = try self.qmatmul(act, w.up_w, w.up_s, w.up_b);
+            defer _ = mlx.mlx_array_free(up);
+            const shape4 = [_]c_int{ batch, seq_len, hc, hidden };
+            var up4 = mlx.mlx_array_new();
+            defer _ = mlx.mlx_array_free(up4);
+            try mlx.check(mlx.mlx_reshape(&up4, up, &shape4, 4, self.s));
+            if (try applyClosure(self.compiled_hc_mix, &.{ up4, n4 })) |m| {
+                mixed = m;
+            } else {
+                var mix = mlx.mlx_array_new();
+                defer _ = mlx.mlx_array_free(mix);
+                try mlx.check(mlx.mlx_sigmoid(&mix, up4, self.s));
+                var prod = mlx.mlx_array_new();
+                defer _ = mlx.mlx_array_free(prod);
+                try mlx.check(mlx.mlx_multiply(&prod, mix, n4, self.s));
+                mixed = mlx.mlx_array_new();
+                try mlx.check(mlx.mlx_mean_axis(&mixed, prod, 2, false, self.s));
+            }
         }
         errdefer _ = mlx.mlx_array_free(mixed);
 
@@ -31245,6 +31250,238 @@ pub fn hcReadFused(
     return .{ .mixed = mixed, .inj = inj_out, .stream = stream_out };
 }
 
+// ── Prefill HC up-projection + stream mix (fused GEMM epilogue) ──
+//
+// The composed prefill HC read materializes the full up projection
+// [B, S, hc*H] (~168 MB bf16 at S=8192) only to run sigmoid(up)·n4 and a
+// mean over the hc streams: the tensor is written once, then read back three
+// times (sigmoid, multiply, mean). This kernel folds that epilogue into the
+// up GEMM: the [SM, SN] accumulator tile stays in fp32 registers, each output
+// is rounded to T once for the sigmoid LUT (the same 65536-entry table the
+// SwiGLU kernels index — swigluSigTable), multiplied by the corresponding
+// normalized-stream element (product rounded to T), and accumulated over the
+// hc streams — the [B, S, hc*H] intermediate never exists.
+//
+// Reference-equal (CPU): research/hc_up_mix_reference.py shows the kernel's
+// rounding points (bf16 up via LUT, bf16 product, fp32 stream sum, 1/hc
+// scale) match the composed chain exactly at the index level; on-device the
+// GEMM accumulation order differs from stock qmm, so expect the accepted
+// 1-2 bf16 ULP class. Tile BM=32 × BN=64 × BK=64, threadgroup {32,2,2}
+// (4 simdgroups, each a 16×32 tile; lane = column). Plain-SIMD fp32
+// accumulate (the NAX tensor-op tile is the M5 perf follow-up, mirroring the
+// handoff's work/hc_up_mix.metal which used the Apple MLX NAX header).
+//
+// Opt-in until it passes on Apple Silicon: MLX_SERVE_HC_UP_MIX=1 (kill switch
+// =0). Gated to 4-bit affine / group 64 / H%64==0 / R%64==0 (the named
+// model's geometry); everything else keeps the composed chain. M tails are
+// masked in-kernel.
+const HC_UP_MIX_SOURCE =
+    \\constexpr int BM = 32;
+    \\constexpr int BN = 64;
+    \\constexpr int BK = 64;
+    \\constexpr int WM = 2;
+    \\constexpr int WN = 2;
+    \\constexpr int SM = BM / WM;
+    \\constexpr int SN = BN / WN;
+    \\constexpr int VPW = 32 / BITS;
+    \\
+    \\const int tid = thread_index_in_threadgroup;  // 0..127 linear (threadgroup is 32x2x2)
+    \\const int sg = simdgroup_index_in_threadgroup;
+    \\const int lane = thread_index_in_simdgroup;
+    \\const int tm = (sg / WN) * SM;
+    \\const int tn = (sg % WN) * SN;
+    \\
+    \\const int M = int(M_size);
+    \\const int K = int(K_size);
+    \\const int R_by_p = K / VPW;   // uint32 words per up-weight row
+    \\const int R_by_gs = K / GS;    // scale/bias groups per row
+    \\
+    \\const int row0 = threadgroup_position_in_grid.y * BM;
+    \\const int col0 = threadgroup_position_in_grid.x * BN;
+    \\
+    \\threadgroup float Atile[BM * BK];
+    \\threadgroup float Btile[BN * BK];
+    \\
+    \\float sums[SM];
+    \\for (int i = 0; i < SM; ++i) sums[i] = 0.0f;
+    \\
+    \\for (int h = 0; h < HC; ++h) {
+    \\    const int wrow0 = h * H + col0;
+    \\    float acc[SM];
+    \\    for (int i = 0; i < SM; ++i) acc[i] = 0.0f;
+    \\
+    \\    for (int k0 = 0; k0 < K; k0 += BK) {
+    \\        for (int t = tid; t < BM * BK; t += 128) {
+    \\            int r = t / BK, kk = t % BK;
+    \\            int row = row0 + r;
+    \\            int k = k0 + kk;
+    \\            Atile[t] = (row < M && k < K) ? float(act[(size_t)row * K + k]) : 0.0f;
+    \\        }
+    \\        for (int t = tid; t < BN * BK; t += 128) {
+    \\            int c = t / BK, kk = t % BK;
+    \\            int k = k0 + kk;
+    \\            int n = wrow0 + c;
+    \\            float v = 0.0f;
+    \\            if (k < K) {
+    \\                uint pw = uw_q[(size_t)n * R_by_p + (k / VPW)];
+    \\                uint q = (pw >> ((k % VPW) * BITS)) & ((1u << BITS) - 1u);
+    \\                v = float(q) * float(uw_s[(size_t)n * R_by_gs + (k / GS)])
+    \\                  + float(uw_b[(size_t)n * R_by_gs + (k / GS)]);
+    \\            }
+    \\            Btile[t] = v;
+    \\        }
+    \\        threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\
+    \\        for (int i = 0; i < SM; ++i) {
+    \\            float s = 0.0f;
+    \\            for (int kk = 0; kk < BK; ++kk)
+    \\                s += Atile[(tm + i) * BK + kk] * Btile[(tn + lane) * BK + kk];
+    \\            acc[i] += s;
+    \\        }
+    \\        threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\    }
+    \\
+    \\    const int col = col0 + tn + lane;
+    \\    if (col < H) {
+    \\        for (int i = 0; i < SM; ++i) {
+    \\            int row = row0 + tm + i;
+    \\            if (row < M) {
+    \\                T u = T(acc[i]);
+    \\                T sg = sigtab[as_type<ushort>(u)];
+    \\                T prod = T(float(sg) * float(n4[((size_t)row * HC + h) * H + col]));
+    \\                sums[i] += float(prod);
+    \\            }
+    \\        }
+    \\    }
+    \\}
+    \\
+    \\for (int i = 0; i < SM; ++i) {
+    \\    int row = row0 + tm + i;
+    \\    int col = col0 + tn + lane;
+    \\    if (row < M && col < H)
+    \\        mixed[(size_t)row * H + col] = T(sums[i] * (1.0f / float(HC)));
+    \\}
+;
+
+const HcUpMixKey = struct { hc: c_int, h: c_int, rows: c_int, dtype: mlx.mlx_dtype };
+var hc_upmix_kernel: ?mlx.mlx_fast_metal_kernel = null;
+var hc_upmix_cfg: ?mlx.mlx_fast_metal_kernel_config = null;
+var hc_upmix_key: HcUpMixKey = std.mem.zeroes(HcUpMixKey);
+var hc_upmix_engaged = false;
+var hc_upmix_env: ?bool = null;
+pub var hc_upmix_override: ?bool = null;
+
+fn hcUpMixEnabled() bool {
+    if (hc_upmix_override) |v| return v;
+    if (hc_upmix_env) |v| return v;
+    const raw = std.c.getenv("MLX_SERVE_HC_UP_MIX");
+    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
+    hc_upmix_env = enabled;
+    return enabled;
+}
+
+fn getHcUpMixKernel() !mlx.mlx_fast_metal_kernel {
+    if (hc_upmix_kernel) |k| return k;
+    const input_names = [_][*:0]const u8{ "act", "n4", "uw_q", "uw_s", "uw_b", "sigtab", "M_size", "K_size" };
+    const output_names = [_][*:0]const u8{"mixed"};
+    const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+    defer _ = mlx.mlx_vector_string_free(in_vec);
+    const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+    defer _ = mlx.mlx_vector_string_free(out_vec);
+    const kernel = mlx.mlx_fast_metal_kernel_new("mlxserve_hc_up_mix", in_vec, out_vec, HC_UP_MIX_SOURCE, "", true, false);
+    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+    hc_upmix_kernel = kernel;
+    return kernel;
+}
+
+/// Prefill HC up+mix: `mean_h(sigmoid(act @ up_wᵀ) · n4)` in one dispatch.
+/// `act` [B,S,R], `n4` [B,S,hc,H] (both T), `uw` uint32-packed 4-bit affine
+/// [hc*H, R*4/32], `us`/`ub` [hc*H, R/64]. Returns mixed [B,S,H], or null
+/// when the geometry/quant is outside the kernel (caller keeps the chain).
+pub fn hcUpMixFused(
+    s: mlx.mlx_stream,
+    act: mlx.mlx_array,
+    n4: mlx.mlx_array,
+    uw: mlx.mlx_array,
+    us: mlx.mlx_array,
+    ub: mlx.mlx_array,
+    batch: c_int,
+    seq: c_int,
+    hc: c_int,
+    hidden: c_int,
+    bits: u32,
+    group_size: u32,
+) !?mlx.mlx_array {
+    if (!hcUpMixEnabled()) return null;
+    if (!mlx.streamIsGpu(s)) return null;
+    if (bits != 4 or group_size != 64) return null;
+    const xd = mlx.mlx_array_dtype(act);
+    if (xd != .bfloat16 and xd != .float16) return null;
+    if (mlx.mlx_array_dtype(n4) != xd) return null;
+    if (us.ctx == null or ub.ctx == null) return null;
+    const M = batch * seq;
+    const H = hidden;
+    if (M < 1 or H < 1 or hc < 1 or hc > 8) return null;
+    if (@rem(H, 64) != 0) return null;
+    const ash = mlx.getShape(act);
+    const nsh = mlx.getShape(n4);
+    if (ash.len != 3 or nsh.len != 4) return null;
+    const R: c_int = ash[2];
+    if (R < 1 or @rem(R, 64) != 0) return null;
+    if (nsh[2] != hc or nsh[3] != H) return null;
+    if (mlx.mlx_array_size(act) != @as(usize, @intCast(M * R))) return null;
+    if (mlx.mlx_array_size(n4) != @as(usize, @intCast(M * hc * H))) return null;
+    const ush = mlx.getShape(uw);
+    const ssh = mlx.getShape(us);
+    const bsh = mlx.getShape(ub);
+    if (ush.len != 2 or ush[0] != hc * H) return null;
+    if (@divExact(ush[1] * 32, @as(c_int, @intCast(bits))) != R) return null;
+    if (ssh.len != 2 or ssh[0] != hc * H or bsh.len != 2 or bsh[0] != hc * H) return null;
+    if (ssh[1] * @as(c_int, @intCast(group_size)) != R or bsh[1] != ssh[1]) return null;
+
+    const key = HcUpMixKey{ .hc = hc, .h = H, .rows = M, .dtype = xd };
+    if (hc_upmix_cfg == null or !std.meta.eql(hc_upmix_key, key)) {
+        if (hc_upmix_cfg) |c| _ = mlx.mlx_fast_metal_kernel_config_free(c);
+        const config = mlx.mlx_fast_metal_kernel_config_new();
+        const out_shape = [_]c_int{ M, H };
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &out_shape, 2, xd));
+        const cols_tg = @divExact(H, 64);
+        const rows_tg = @divTrunc(M + 31, 32);
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(config, cols_tg * 32, rows_tg * 2, 2));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(config, 32, 2, 2));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(config, "T", xd));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "BITS", @intCast(bits)));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "GS", @intCast(group_size)));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "HC", hc));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "H", H));
+        hc_upmix_cfg = config;
+        hc_upmix_key = key;
+    }
+
+    const sigtab = try swigluSigTable(s, xd, std.heap.c_allocator);
+    const M_arr = mlx.mlx_array_new_int(M);
+    defer _ = mlx.mlx_array_free(M_arr);
+    const K_arr = mlx.mlx_array_new_int(R);
+    defer _ = mlx.mlx_array_free(K_arr);
+    const inputs_arr = [_]mlx.mlx_array{ act, n4, uw, us, ub, sigtab, M_arr, K_arr };
+    const inputs_vec = mlx.mlx_vector_array_new_data(&inputs_arr, inputs_arr.len);
+    defer _ = mlx.mlx_vector_array_free(inputs_vec);
+
+    const kernel = try getHcUpMixKernel();
+    var outputs_vec = mlx.mlx_vector_array_new();
+    defer _ = mlx.mlx_vector_array_free(outputs_vec);
+    try mlx.check(mlx.mlx_fast_metal_kernel_apply(&outputs_vec, kernel, inputs_vec, hc_upmix_cfg.?, s));
+    if (mlx.mlx_vector_array_size(outputs_vec) != 1) return error.MetalKernelBadOutputCount;
+    var mixed = mlx.mlx_array_new();
+    errdefer _ = mlx.mlx_array_free(mixed);
+    try mlx.check(mlx.mlx_vector_array_get(&mixed, outputs_vec, 0));
+    if (!hc_upmix_engaged) {
+        hc_upmix_engaged = true;
+        log.info("[hc] fused prefill up+mix kernel engaged: M={d} hc={d} H={d} R={d} {d}-bit g{d}\n", .{ M, hc, H, R, bits, group_size });
+    }
+    return mixed;
+}
+
 const GateUpCfgKey = struct { topk: c_int, n: c_int, k: c_int, bits: u32, gs: u32, dtype: mlx.mlx_dtype };
 var gateup_cfg: ?mlx.mlx_fast_metal_kernel_config = null;
 var gateup_cfg_key: GateUpCfgKey = std.mem.zeroes(GateUpCfgKey);
@@ -36290,6 +36527,131 @@ test "fused hyper-connection read matches the op chain per element" {
         try expectRowsExact(allocator, s, rows3.stream, one.stream, r, @intCast(K));
     }
     try testing.expect((try hcReadFused(s, x3, 1, 17, nw, down.w, down.sc, down.bi, up.w, up.sc, up.bi, iw, eps, HC, H, bits, gs, null)) == null);
+}
+
+test "fused HC prefill up+mix kernel matches the composed up/sigmoid/mean chain" {
+    // Reference = act @ up_wᵀ (quantized) → reshape → sigmoid → ×n4 → mean over
+    // hc. The kernel folds sigmoid/×n4/mean into the up GEMM epilogue with the
+    // SAME rounding points (bf16 up via LUT, bf16 product, fp32 stream sum,
+    // 1/hc scale) — see research/hc_up_mix_reference.py — so the bar is
+    // per-element within a few bf16 ulps (only the GEMM accumulation order
+    // differs from stock qmm). Clean and tail (M%32!=0) widths both checked.
+    const s = mlx.gpuStream();
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x4C0FFEE + 1);
+    const rnd = prng.random();
+    hc_upmix_override = true;
+    defer hc_upmix_override = null;
+
+    const HC: c_int = 4;
+    const H: c_int = 512;
+    const R: c_int = 64;
+    const bits: u32 = 4;
+    const gs: u32 = 64;
+
+    const Q = struct { w: mlx.mlx_array, sc: mlx.mlx_array, bi: mlx.mlx_array };
+    const quantRandom = struct {
+        fn f(a: std.mem.Allocator, r: std.Random, st: mlx.mlx_stream, rows: c_int, cols: c_int) !Q {
+            const buf = try a.alloc(f32, @intCast(rows * cols));
+            defer a.free(buf);
+            for (buf) |*v| v.* = (r.float(f32) - 0.5) * 0.2;
+            const sh = [_]c_int{ rows, cols };
+            const w32 = mlx.mlx_array_new_data(buf.ptr, &sh, 2, .float32);
+            defer _ = mlx.mlx_array_free(w32);
+            var wb = mlx.mlx_array_new();
+            defer _ = mlx.mlx_array_free(wb);
+            try mlx.check(mlx.mlx_astype(&wb, w32, .bfloat16, st));
+            var triple = mlx.mlx_vector_array_new();
+            defer _ = mlx.mlx_vector_array_free(triple);
+            try mlx.check(mlx.mlx_quantize(&triple, wb, mlx.mlx_optional_int.some(64), mlx.mlx_optional_int.some(4), "affine", .{}, st));
+            var q: Q = undefined;
+            q.w = mlx.mlx_array_new();
+            try mlx.check(mlx.mlx_vector_array_get(&q.w, triple, 0));
+            q.sc = mlx.mlx_array_new();
+            try mlx.check(mlx.mlx_vector_array_get(&q.sc, triple, 1));
+            q.bi = mlx.mlx_array_new();
+            try mlx.check(mlx.mlx_vector_array_get(&q.bi, triple, 2));
+            return q;
+        }
+    }.f;
+    const bf16Random = struct {
+        fn f(a: std.mem.Allocator, r: std.Random, st: mlx.mlx_stream, shape: []const c_int, scale: f32, offset: f32) !mlx.mlx_array {
+            var n: usize = 1;
+            for (shape) |d| n *= @intCast(d);
+            const buf = try a.alloc(f32, n);
+            defer a.free(buf);
+            for (buf) |*v| v.* = (r.float(f32) - 0.5) * scale + offset;
+            const a32 = mlx.mlx_array_new_data(buf.ptr, shape.ptr, @intCast(shape.len), .float32);
+            defer _ = mlx.mlx_array_free(a32);
+            var out = mlx.mlx_array_new();
+            try mlx.check(mlx.mlx_astype(&out, a32, .bfloat16, st));
+            return out;
+        }
+    }.f;
+
+    const up = try quantRandom(allocator, rnd, s, HC * H, R);
+    defer {
+        _ = mlx.mlx_array_free(up.w);
+        _ = mlx.mlx_array_free(up.sc);
+        _ = mlx.mlx_array_free(up.bi);
+    }
+
+    const checkClose = struct {
+        fn f(a: std.mem.Allocator, st: mlx.mlx_stream, ref: mlx.mlx_array, val: mlx.mlx_array, n: usize) !void {
+            const rh = try a.alloc(f32, n);
+            defer a.free(rh);
+            const gh = try a.alloc(f32, n);
+            defer a.free(gh);
+            try testReadF32(ref, rh, st);
+            try testReadF32(val, gh, st);
+            var worst: f32 = 0;
+            for (rh, gh) |r, g| {
+                const tol = 0.02 * @abs(r) + 0.008;
+                const diff = @abs(r - g);
+                if (diff > tol and diff / tol > worst) worst = diff / tol;
+            }
+            std.debug.print("hc up+mix: n={d} worst diff/tol={d:.3}\\n", .{ n, worst });
+            if (worst > 0) return error.HcUpMixParity;
+        }
+    }.f;
+
+    const cases = [_][1]c_int{ .{64}, .{33} };
+    for (cases) |cs| {
+        const M = cs[0];
+        const act = try bf16Random(allocator, rnd, s, &.{ 1, M, R }, 4.0, 0.0);
+        defer _ = mlx.mlx_array_free(act);
+        const n4 = try bf16Random(allocator, rnd, s, &.{ 1, M, HC, H }, 2.0, 0.0);
+        defer _ = mlx.mlx_array_free(n4);
+
+        // Reference chain.
+        const u = try qmatmulBits(act, up.w, up.sc, up.bi, bits, gs, .affine, s);
+        defer _ = mlx.mlx_array_free(u);
+        const shape4 = [_]c_int{ 1, M, HC, H };
+        var uu4 = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(uu4);
+        try mlx.check(mlx.mlx_reshape(&uu4, u, &shape4, 4, s));
+        var sig = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(sig);
+        try mlx.check(mlx.mlx_sigmoid(&sig, uu4, s));
+        var prod = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(prod);
+        try mlx.check(mlx.mlx_multiply(&prod, sig, n4, s));
+        var ref = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(ref);
+        try mlx.check(mlx.mlx_mean_axis(&ref, prod, 2, false, s));
+
+        const got = (try hcUpMixFused(s, act, n4, up.w, up.sc, up.bi, 1, M, HC, H, bits, gs)) orelse return error.HcUpMixDeclined;
+        defer _ = mlx.mlx_array_free(got);
+        try checkClose(allocator, s, ref, got, @intCast(M * H));
+    }
+
+    // Off-geometry must decline, not read out of bounds (H=63 not a multiple of
+    // the BN=64 column tile).
+    const bad = try bf16Random(allocator, rnd, s, &.{ 1, 33, R }, 4.0, 0.0);
+    defer _ = mlx.mlx_array_free(bad);
+    const n4bad = try bf16Random(allocator, rnd, s, &.{ 1, 33, HC, 63 }, 2.0, 0.0);
+    defer _ = mlx.mlx_array_free(n4bad);
+    try testing.expect((try hcUpMixFused(s, bad, n4bad, up.w, up.sc, up.bi, 1, 33, HC, 63, bits, gs)) == null);
 }
 
 test "fused gate+up+SwiGLU expert kernel is bit-identical to the split gatherQmv path" {
