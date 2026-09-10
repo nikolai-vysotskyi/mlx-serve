@@ -101,6 +101,64 @@ def seq(dtype, inp, S0):
     return y, S
 
 
+def fold_chunk(dtype, k, v, g, beta, hk, t0, t1, wy):
+    """Return (A_c, B_c) for the chunk [t0,t1): A_c the Dk×Dk transition and
+    B_c the Dk×Dv forcing, so M_{t1-1} = A_c M_{t0-1} + B_c. wy=False uses the
+    naive O(C·Dk³) fold; wy=True the WY O(C·Dk²) form (fla)."""
+    I = np.eye(DK, dtype=dtype)
+    if not wy:
+        a = np.broadcast_to(I, (HV, DK, DK)).copy()
+        b = np.zeros((HV, DK, DV), dtype=dtype)
+        for t in range(t0, t1):
+            gt = g[t][:, None, None]
+            bt = beta[t][:, None, None]
+            kt = k[t][hk]
+            at = gt * (I[None] - bt * np.einsum("hi,hj->hij", kt, kt))
+            btt = bt * np.einsum("hi,hj->hij", kt, v[t])
+            b = at @ b + btt
+            a = at @ a
+        return a, b
+    Ac = np.empty((HV, DK, DK), dtype=dtype)
+    Bc = np.empty((HV, DK, DV), dtype=dtype)
+    for h in range(HV):
+        kk = k[t0:t1, hk[h]]                              # [C, Dk]
+        vv = v[t0:t1, h]                                  # [C, Dv]
+        bb = beta[t0:t1, h]                               # [C]
+        gg = g[t0:t1, h]                                  # [C]
+        # log-space running gate (fla: g is a log2 cumsum; exp2 of
+        # differences). Avoids cumprod underflow for large C in fp32.
+        lg = np.cumsum(np.log(gg.astype(np.float64)))     # [C] (f64 log)
+        lg = lg.astype(dtype)
+        G = np.exp(lg[-1])
+        # log-diff masked to the lower triangle BEFORE exp: exp(+large) in
+        # the upper triangle would overflow fp32 and 0*inf -> NaN.
+        logdiff = np.where(np.tril(np.ones((t1 - t0, t1 - t0)), -1).astype(bool),
+                           lg[:, None] - lg[None, :], -np.inf)
+        ratio = np.exp(logdiff)                           # expg_i/expg_j, i>j
+        expg = np.exp(lg)                                 # running product
+        KK = kk @ kk.T                                    # [C, C]
+        L = KK * bb[:, None] * ratio                      # [C, C] (i>j only)
+        Ainv = np.linalg.inv(np.eye(t1 - t0, dtype=dtype) + L)
+        w = Ainv @ (bb[:, None] * expg[:, None] * kk)     # [C, Dk]
+        u = Ainv @ (bb[:, None] * vv)                     # [C, Dv]
+        scale = np.exp(lg[-1] - lg)[:, None]              # G/expg[t]
+        Ac[h] = G * I - (kk * scale).T @ w                # [Dk, Dk]
+        Bc[h] = (kk * scale).T @ u                        # [Dk, Dv]
+    return Ac, Bc
+
+
+def _replay_chunk(dtype, k, q, v, g, beta, hk, y, t0, t1, Mpre):
+    """Replay chunk [t0,t1) from boundary state Mpre ([Hv,Dk,Dv]) in the shipped
+    kernel's exact per-token order, writing y[t]."""
+    Scur = Mpre.transpose(0, 2, 1).copy()                 # [Hv, Dv, Dk]
+    for t in range(t0, t1):
+        Scur *= g[t][:, None, None]
+        kv = np.einsum("hid,hd->hi", Scur, k[t][hk])
+        delta = (v[t] - kv) * beta[t][:, None]
+        Scur += delta[:, :, None] * k[t][hk][:, None, :]
+        y[t] = np.einsum("hid,hd->hi", Scur, q[t][hk])
+
+
 def chunk_scan(dtype, inp, S0, C, wy=False):
     """Chunk-scan: intra-chunk in the shipped kernel's exact per-token order;
     chunk boundary state advanced via a chunk product A_c / forcing B_c.
@@ -111,68 +169,69 @@ def chunk_scan(dtype, inp, S0, C, wy=False):
     T = k.shape[0]
     hk = np.arange(HV) // GROUP
     M0 = S0.astype(dtype).transpose(0, 2, 1)                  # [Hv, Dk, Dv]
-    I = np.eye(DK, dtype=dtype)
     NC = (T + C - 1) // C
 
-    def fold(t0, t1):
-        """Return (A_c, B_c) for the chunk, either naive or WY."""
-        if not wy:
-            a = np.broadcast_to(I, (HV, DK, DK)).copy()
-            b = np.zeros((HV, DK, DV), dtype=dtype)
-            for t in range(t0, t1):
-                gt = g[t][:, None, None]
-                bt = beta[t][:, None, None]
-                kt = k[t][hk]
-                at = gt * (I[None] - bt * np.einsum("hi,hj->hij", kt, kt))
-                btt = bt * np.einsum("hi,hj->hij", kt, v[t])
-                b = at @ b + btt
-                a = at @ a
-            return a, b
-        # ---- WY form (fla), per hv head
-        Ac = np.empty((HV, DK, DK), dtype=dtype)
-        Bc = np.empty((HV, DK, DV), dtype=dtype)
-        for h in range(HV):
-            kk = k[t0:t1, hk[h]]                              # [C, Dk]
-            vv = v[t0:t1, h]                                  # [C, Dv]
-            bb = beta[t0:t1, h]                               # [C]
-            gg = g[t0:t1, h]                                  # [C]
-            # log-space running gate (fla: g is a log2 cumsum; exp2 of
-            # differences). Avoids cumprod underflow for large C in fp32.
-            lg = np.cumsum(np.log(gg.astype(np.float64)))     # [C] (f64 log)
-            lg = lg.astype(dtype)
-            G = np.exp(lg[-1])
-            # log-diff masked to the lower triangle BEFORE exp: exp(+large) in
-            # the upper triangle would overflow fp32 and 0*inf -> NaN.
-            logdiff = np.where(np.tril(np.ones((t1 - t0, t1 - t0)), -1).astype(bool),
-                               lg[:, None] - lg[None, :], -np.inf)
-            ratio = np.exp(logdiff)                           # expg_i/expg_j, i>j
-            expg = np.exp(lg)                                 # running product
-            KK = kk @ kk.T                                    # [C, C]
-            L = KK * bb[:, None] * ratio                      # [C, C] (i>j only)
-            Ainv = np.linalg.inv(np.eye(t1 - t0, dtype=dtype) + L)
-            w = Ainv @ (bb[:, None] * expg[:, None] * kk)     # [C, Dk]
-            u = Ainv @ (bb[:, None] * vv)                     # [C, Dv]
-            scale = np.exp(lg[-1] - lg)[:, None]              # G/expg[t]
-            Ac[h] = G * I - (kk * scale).T @ w                # [Dk, Dk]
-            Bc[h] = (kk * scale).T @ u                        # [Dk, Dv]
-        return Ac, Bc
-
-    # fold chunks (parallel-able), then scan boundary states (sequential over NC)
     y = np.empty((T, HV, DV), dtype=dtype)
     M = M0
     for c in range(NC):
         t0, t1 = c * C, min(T, (c + 1) * C)
-        Ac, Bc = fold(t0, t1)
+        Ac, Bc = fold_chunk(dtype, k, v, g, beta, hk, t0, t1, wy)
         Mpre = M                                              # state at t0 - 1
         M = Ac @ Mpre + Bc                                    # state at t1 - 1
-        Scur = Mpre.transpose(0, 2, 1).copy()                 # [Hv, Dv, Dk]
-        for t in range(t0, t1):                               # exact per-token replay
-            Scur *= g[t][:, None, None]
-            kv = np.einsum("hid,hd->hi", Scur, k[t][hk])
-            delta = (v[t] - kv) * beta[t][:, None]
-            Scur += delta[:, :, None] * k[t][hk][:, None, :]
-            y[t] = np.einsum("hid,hd->hi", Scur, q[t][hk])
+        _replay_chunk(dtype, k, q, v, g, beta, hk, y, t0, t1, Mpre)
     return y, M.transpose(0, 2, 1)
+
+
+def chunk_scan_hier(dtype, inp, S0, C, S, wy=True):
+    """Two-level chunked scan: compose C-token chunk operators into
+    S-chunk super-chunk operators, scan the super-chunk boundary states, then
+    rescan each super-chunk's chunk boundaries and replay. Critical path
+    ~2C + 2S + NC/S instead of 2C + NC (single-level). Same WY chunk fold."""
+    k, q, v, g, beta = (a.astype(dtype) for a in
+                        (inp["k"], inp["q"], inp["v"], inp["g"], inp["beta"]))
+    T = k.shape[0]
+    hk = np.arange(HV) // GROUP
+    I = np.eye(DK, dtype=dtype)
+    M0 = S0.astype(dtype).transpose(0, 2, 1)
+    NC = (T + C - 1) // C
+
+    # Level 0: per-chunk operators (parallel over chunks).
+    Ac = np.empty((NC, HV, DK, DK), dtype=dtype)
+    Bc = np.empty((NC, HV, DK, DV), dtype=dtype)
+    for c in range(NC):
+        Ac[c], Bc[c] = fold_chunk(dtype, k, v, g, beta, hk, c * C,
+                                  min(T, (c + 1) * C), wy)
+
+    # Level 1: compose S chunk operators into a super-chunk operator
+    # (parallel over super-chunks; later chunks fold on the LEFT).
+    NSUP = (NC + S - 1) // S
+    As = np.empty((NSUP, HV, DK, DK), dtype=dtype)
+    Bs = np.empty((NSUP, HV, DK, DV), dtype=dtype)
+    for s in range(NSUP):
+        c0, c1 = s * S, min(NC, (s + 1) * S)
+        a = np.broadcast_to(I, (HV, DK, DK)).copy()
+        b = np.zeros((HV, DK, DV), dtype=dtype)
+        for c in range(c0, c1):
+            b = Ac[c] @ b + Bc[c]
+            a = Ac[c] @ a
+        As[s], Bs[s] = a, b
+
+    # Level 2: scan super-chunk states (NSUP sequential steps); Level 3:
+    # rescan chunk boundaries inside each super-chunk (S steps, parallel);
+    # Level 4: exact per-token replay (C steps, parallel).
+    y = np.empty((T, HV, DV), dtype=dtype)
+    Mcur = M0
+    for s in range(NSUP):
+        Msup_pre = Mcur
+        Mcur = As[s] @ Msup_pre + Bs[s]
+        c0, c1 = s * S, min(NC, (s + 1) * S)
+        Mc = Msup_pre
+        for c in range(c0, c1):
+            Mc_pre = Mc
+            Mc = Ac[c] @ Mc_pre + Bc[c]
+            _replay_chunk(dtype, k, q, v, g, beta, hk, y, c * C,
+                          min(T, (c + 1) * C), Mc_pre)
+    return y, Mcur.transpose(0, 2, 1)
 
 
 def err(x: np.ndarray, ref: np.ndarray) -> float:
@@ -180,7 +239,7 @@ def err(x: np.ndarray, ref: np.ndarray) -> float:
                                ref.astype(np.float64))))
 
 
-def run_case(T, C, seed=0x5EED):
+def run_case(T, C, seed=0x5EED, S=16):
     inp = gen(seed, T)
     S0 = bf16((np.random.default_rng(seed + 1).random((HV, DV, DK)) - 0.5)
               .astype(np.float32))
@@ -189,23 +248,27 @@ def run_case(T, C, seed=0x5EED):
     seq_y, seq_S = seq(np.float32, inp, S0)              # shipped kernel (stock)
     cs_y, cs_S = chunk_scan(np.float32, inp, S0, C)      # naive fold
     wy_y, wy_S = chunk_scan(np.float32, inp, S0, C, wy=True)  # WY fold
+    hi_y, hi_S = chunk_scan_hier(np.float32, inp, S0, C, S)   # two-level WY
 
     def row(name, ey, eS):
         print(f"  {name:18s} y_err={ey:9.2e}  state_err={eS:9.2e}")
 
-    print(f"[T={T}, C={C}]")
+    print(f"[T={T}, C={C}, S={S}]")
     row("stock", err(seq_y, ref_y), err(seq_S, ref_S))
     row("chunk-scan", err(cs_y, ref_y), err(cs_S, ref_S))
     row("chunk-scan-wy", err(wy_y, ref_y), err(wy_S, ref_S))
+    row("hier (2-level)", err(hi_y, ref_y), err(hi_S, ref_S))
 
     se_y, se_S = err(seq_y, ref_y), err(seq_S, ref_S)
     bar_y, bar_S = 1.5 * se_y + 0.02, 1.5 * se_S + 0.02
     ok = {n: (err(y, ref_y) <= bar_y) and (err(s, ref_S) <= bar_S)
           for n, y, s in (("chunk-scan", cs_y, cs_S),
-                          ("chunk-scan-wy", wy_y, wy_S))}
+                          ("chunk-scan-wy", wy_y, wy_S),
+                          ("hier", hi_y, hi_S))}
     print(f"  repo bar y <= {bar_y:.2e}, state <= {bar_S:.2e}  ->  "
           f"chunk-scan {'PASS' if ok['chunk-scan'] else 'FAIL'}, "
-          f"chunk-scan-wy {'PASS' if ok['chunk-scan-wy'] else 'FAIL'}\n")
+          f"chunk-scan-wy {'PASS' if ok['chunk-scan-wy'] else 'FAIL'}, "
+          f"hier {'PASS' if ok['hier'] else 'FAIL'}\n")
     return se_y, se_S, bar_y, bar_S, ok
 
 
@@ -274,7 +337,8 @@ def main():
               .astype(np.float32))
     r_y, r_S = seq(np.float64, inp, S0)
     for name, fn in (("chunk-scan", chunk_scan),
-                     ("chunk-scan-wy", lambda d, i, s, c: chunk_scan(d, i, s, c, True))):
+                     ("chunk-scan-wy", lambda d, i, s, c: chunk_scan(d, i, s, c, True)),
+                     ("hier", lambda d, i, s, c: chunk_scan_hier(d, i, s, c, 8))):
         c_y, c_S = fn(np.float64, inp, S0, C)
         d_y = float(np.max(np.abs(c_y - r_y)))
         d_S = float(np.max(np.abs(c_S - r_S)))
@@ -282,6 +346,10 @@ def main():
               f"state {d_S:.3e} (expect ~1e-15)")
 
     print()
+    for T, C in ((8192, 64), (8192, 128)):
+        print(f"[Q3 depth, T={T}, C={C}] single-level 2C+NC = "
+              f"{2*C + T//C}, two-level(S=16) 2C+2S+NC/S = "
+              f"{2*C + 2*16 + (T//C)//16}")
     budget(4096, 128)
     budget(8192, 256)
     print("  NOTE: the win comes from shortening the T-step dependency chain,")
