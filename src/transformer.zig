@@ -619,9 +619,17 @@ const GDN_CHUNK_KERNEL_FOLD_BODY =
     \\}
     \\
     \\if (a_part) {
+    \\    // A_c is consumed row-major by the scan (A_c[dk_out][dk']); thread owns
+    \\    // COLUMN g = dk' and 16 OUTPUT rows d0..d0+16, so scatter with a Dk
+    \\    // stride (mirrors the B-part write). A contiguous vec4 write here would
+    \\    // silently store the transpose.
     \\    const int g = col0 + col;
-    \\    device vec<float,4>* dst = (device vec<float,4>*)(A_out + (size_t)g * Dk + d0);
-    \\    for (int i = 0; i < 4; ++i) dst[i] = st[i];
+    \\    for (int i = 0; i < 4; ++i) {
+    \\        A_out[(size_t)(d0 + 4 * i + 0) * Dk + g] = st[i].x;
+    \\        A_out[(size_t)(d0 + 4 * i + 1) * Dk + g] = st[i].y;
+    \\        A_out[(size_t)(d0 + 4 * i + 2) * Dk + g] = st[i].z;
+    \\        A_out[(size_t)(d0 + 4 * i + 3) * Dk + g] = st[i].w;
+    \\    }
     \\} else {
     \\    const int dv = col0 - Dk + col;
     \\    for (int i = 0; i < 4; ++i) {
@@ -39523,7 +39531,7 @@ fn gdnRunYStateChunked(q: mlx.mlx_array, k: mlx.mlx_array, v: mlx.mlx_array, g: 
     defer _ = mlx.mlx_fast_metal_kernel_config_free(fold_config);
     try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(fold_config, &Ac_shape, 5, .float32));
     try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(fold_config, &Bc_shape, 5, .float32));
-    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(fold_config, @divExact(Dk + Dv, 32), Hv, B * NC));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(fold_config, 256 * @divExact(Dk + Dv, 32), Hv, B * NC));
     try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(fold_config, 256, 1, 1));
     try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(fold_config, "InT", in_dtype));
     try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(fold_config, "Dk", Dk));
