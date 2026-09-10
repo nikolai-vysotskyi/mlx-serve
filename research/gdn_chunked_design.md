@@ -123,27 +123,33 @@ All phases keyed by `(b, hv)`; GQA maps `hv → hk = hv/(Hv/Hk)` exactly as the
 shipped kernels do. Chunk size `C` is a compile-time constant (16/32/64) —
 see the threadgroup budget below.
 
-**Phase A — per-chunk WY (fully parallel over `(b, hv, chunk)`):**
-1. Load k,v,β,g for the chunk; compute `expg` via a log-domain prefix scan.
-2. Build `L` (C×C strictly-lower) = β_i·(k_i·k_j)·expg_i/expg_j — a C×C matrix
-   of rank-Dk inner products, parallel over (i,j).
-3. Solve `(I+L)⁻¹ x` for x = (β·expg·k) and x = (β·v) → `w`, `u`. Use forward
-   substitution (depth C) or the nilpotent repeated-squaring
-   `(I+L)⁻¹ = Π_j (I + L^{2^j})` (depth log₂C); correctness pinned by §2.
-4. Emit `w` [C×Dk], `u` [C×Dv], and the chunk's `G` and `expg` tail (for the
-   scan), to device.
+**Phase A — per-chunk rank-1 fold (fully parallel over `(b, hv, chunk)`):**
+The IMPLEMENTED form (chosen over WY for this first cut — no C×C solve, and
+the fold kernel is a near-copy of the blocked kernel's inner loop). Because
+`A_t = g_t(I − β_t k_t k_tᵀ)` is a scaled rank-1 perturbation of I, the chunk
+product `A_c` (Dk×Dk) and forcing `B_c` (Dk×Dv) are the shipped per-token
+recurrence run on the `Dk + Dv` augmented basis columns: A-columns start at
+`e_j` with v≡0; B-columns start at 0 with the real v. No solve at all.
+
+```
+for col in 0..Dk+Dv-1:          # parallel over 32-column tiles
+    st = (col < Dk) ? e_col : 0
+    for t in chunk:
+        st = g_t·st − g_t·β_t·(st·k_t)·k_t + β_t·v_t[col−Dk]·k_t   # v≡0 if col<Dk
+    A_c[:, col]     = st         (col < Dk)      # [dk_out][dk']
+    B_c[:, col−Dk]  = st         (col ≥ Dk)      # [dk_out][dv]
+```
+
+Cost O(C·(Dk² + Dk·Dv)) ≈ 1.3× the WY FLOP at C=64, but it materializes
+A_c/B_c (403/201 MB at 8192/C=64 — see §4). WY remains the follow-up for
+larger C (≤64 budget-free) once the scan/rank-1 path is measured.
 
 **Phase B — boundary scan (sequential over chunks, NC = T/C steps):**
-Per `(b, hv)`, advance the running `M` (Dk×Dv) without materializing `A_c`:
-
-```
-M ← G·M − Σ_t (G/expg_t) k_t (w_tᵀ M) + Σ_t (G/expg_t) k_t u_tᵀ
-```
-
-i.e. two `O(C·Dk·Dv)` matmuls per chunk (K̃ @ (w @ M) and K̃ @ u) — the same
-form as fla `fwd_h` (`b_v = w·h; b_h += k·(u − b_v)`). Store the per-chunk
-boundary `M_c` (Dk×Dv per chunk) for Phase C. The scan is NC sequential steps
-vs T today.
+Per `(b, hv)`, advance the running `M` (Dk×Dv) via the materialized product:
+`M ← A_c @ M + B_c`, tiled 32×32 over dk, with `M` held transposed `[dv][dk]`
+in threadgroup memory (the shipped state-buffer convention). Store the
+per-chunk POST boundary `M_c` (as `[dv][dk]` f32) for Phase C. NC sequential
+matmul steps vs T vector steps today.
 
 **Phase C — output replay (parallel over `(b, hv, chunk)`):**
 From each chunk's boundary `M_{c−1}`, replay the shipped per-token recurrence
@@ -194,13 +200,29 @@ existing stock/blocked kernels, exactly as today. Kill switch pattern
   full run within `0.02·max|state| + 0.02`.
 - Golden cross-check vs `research/gdn_chunked_reference.py` (NumPy f64) for a
   fixed seed, asserting `max|diff| < 1e-3`-class agreement.
+- **`research/gdn_chunked_kernel_sim.py`** (runs here, CPU): reproduces the
+  kernels' EXACT index arithmetic (rank-1 fold → A_c/B_c, sequential scan with
+  POST-per-chunk M_seq, per-chunk replay) in NumPy and checks end-to-end vs the
+  f64-validated `chunk_scan`. PASS at T=128/500/1024/2050: mine-vs-reference
+  rel y err 2.0e-4…4.0e-4 (the reference's own re-association vs seq is
+  1.7e-4…2.4e-4), state 4.2e-7. It also pins the fold write orientation: the
+  corrected `A_out[dk_out*Dk+dk']` scatter is exact (0.0) while the pre-fix
+  transpose is O(1) off (A_c 3-step asym 0.018–0.064). Two Metal bugs were
+  found and fixed by this review: (1) fold stored A_c transposed; (2) fold
+  grid.x lacked the ×256 thread factor (`set_grid` counts threads).
 
 ## 9. Next steps (need Apple Silicon)
 
-1. Implement the three phases in Metal + Zig plumbing in src/transformer.zig
-   (mirror `GDN_KERNEL_BLOCKED_BODY` conventions: template dtypes InT/StT/OutT,
-   simdgroup reductions, threadgroup staging, per-TB cached kernel objects).
-2. `zig build test` + the new parity tests on real Apple Silicon.
+1. ✅ Implemented (UNBUILT): the three phases are in src/transformer.zig —
+   `GDN_CHUNK_KERNEL_{FOLD,SCAN,REPLAY}_BODY` (rank-1 fold, tiled boundary
+   scan, chunked replay), Zig plumbing (`gdnChunkedEnabled/C/Eligible`,
+   `gdnRunYStateChunked`, per-(C,TB) kernel caches), and
+   `gdnChunkedParityCase` + parity sweep + chunk-boundary continuity tests.
+   NOT compiled or run here (no Zig/Metal); two index bugs already found and
+   fixed via the CPU sim (§8). Production wiring into `gdnForward` is
+   intentionally deferred until the kernels pass on Mac.
+2. `zig build test` + the new parity tests on real Apple Silicon; fix any MSL
+   compile issues this first build surfaces.
 3. Bench prefill at chunk 8192 on the named model vs the named baseline
    (`bench.contextScaling[].prefillTokPerSec`, llmprobe 0.6.6, rungs 64k,
    chunk8192, prefix-cache 0, MTP off).
