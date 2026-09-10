@@ -24574,12 +24574,23 @@ pub const Transformer = struct {
             try self.addExpertBias(&down_squeezed, mw.switch_down_bias, sorted_inds);
 
             // Inverse permute → original order, then reshape back to [B,S,K,hidden].
-            var down_unsorted = mlx.mlx_array_new();
-            defer _ = mlx.mlx_array_free(down_unsorted);
-            try mlx.check(mlx.mlx_take_axis(&down_unsorted, down_squeezed, inv_order, 0, self.s));
-            const hidden = mlx.getShape(down_unsorted)[1];
-            const bskh_shape = [_]c_int{ B, S, K, hidden };
-            try mlx.check(mlx.mlx_reshape(&down_out, down_unsorted, &bskh_shape, 4, self.s));
+            // Opt-in fused down+score+reduce (MLX_SERVE_MOE_DOWN_REDUCE=1) writes
+            // the weighted expert sum directly — skipping this permute/reshape
+            // AND the multiply+sum below (moe_reduced) — so the [N, hidden]
+            // down tensor is never permuted back nor re-read.
+            const down_hidden = mlx.getShape(down_squeezed)[1];
+            if (try moeDownReduceFused(self.s, down_squeezed, inv_order, norm_scores, B * S, K, down_hidden)) |fused| {
+                const bsh_shape = [_]c_int{ B, S, down_hidden };
+                try mlx.check(mlx.mlx_reshape(&down_out, fused, &bsh_shape, 3, self.s));
+                _ = mlx.mlx_array_free(fused);
+                moe_reduced = true;
+            } else {
+                var down_unsorted = mlx.mlx_array_new();
+                defer _ = mlx.mlx_array_free(down_unsorted);
+                try mlx.check(mlx.mlx_take_axis(&down_unsorted, down_squeezed, inv_order, 0, self.s));
+                const bskh_shape = [_]c_int{ B, S, K, down_hidden };
+                try mlx.check(mlx.mlx_reshape(&down_out, down_unsorted, &bskh_shape, 4, self.s));
+            }
         } else if (B * S == 1 and useGatherQmvDecode(self, gate_qp, up_qp) and mw.switch_gate_s.ctx != null and mw.switch_up_s.ctx != null and mw.switch_down_s.ctx != null and
             try self.moeDecodeGatherQmv(&down_out, expert_x, inds, norm_scores, &moe_reduced, mw, gate_qp, up_qp, down_qp, D, K, B, S))
         {
@@ -31389,6 +31400,149 @@ pub fn hcUpMixFused(
     return mixed;
 }
 
+// ── Prefill MoE down-projection + score-weight + top-K reduce ──
+//
+// The sorted prefill path computes the weighted expert sum as FOUR passes over
+// [T*K, hidden] bf16 (~419 MB at T=8192/K=10/H=2560): the inverse permute
+// (take_axis), a reshape, the score multiply, and the sum over K — on top of
+// the down gather_qmm that produced the tensor. This kernel folds all of them
+// into the gather form: for each (token, column-vec4) it reads its K down rows
+// (coalesced within a warp — lanes share the same (t,k) and stride over
+// hidden) and writes `sum_k bf16(down[inv[t*K+k]] * scores[t,k])` directly.
+//
+// Rounding matches the composed chain exactly (research/moe_down_reduce_-
+// reference.py): bf16 product (mlx_multiply), fp32 accumulation (MLX Reduce
+// widens bfloat16 accumulators to float32 — see mlx/backend/cpu/reduce.cpp
+// ReductionAccumulator::widen_to_float), single bf16 rounding at the end.
+// On-device the two differ only by the fp32 sum's reduction order (simd tree
+// vs left fold), i.e. << 1 bf16 ULP.
+//
+// Opt-in until it passes on Apple Silicon: MLX_SERVE_MOE_DOWN_REDUCE=1 (off by
+// default; everything else keeps the composed chain). Grid = (H/4, T) threads
+// (one thread per column-vec4 per token).
+const MOE_DOWN_REDUCE_SOURCE =
+    \\uint j0 = thread_position_in_grid.x * 4;
+    \\uint t = thread_position_in_grid.y;
+    \\float acc0 = 0.0f, acc1 = 0.0f, acc2 = 0.0f, acc3 = 0.0f;
+    \\for (int k = 0; k < K; ++k) {
+    \\    uint n = inv[(size_t)t * K + k];
+    \\    float sf = float(scores[(size_t)t * K + k]);
+    \\    const device T* dp = down + (size_t)n * H + j0;
+    \\    T d0 = dp[0], d1 = dp[1], d2 = dp[2], d3 = dp[3];
+    \\    T p0 = T(float(d0) * sf);
+    \\    T p1 = T(float(d1) * sf);
+    \\    T p2 = T(float(d2) * sf);
+    \\    T p3 = T(float(d3) * sf);
+    \\    acc0 += float(p0); acc1 += float(p1); acc2 += float(p2); acc3 += float(p3);
+    \\}
+    \\device T* op = out + (size_t)t * H + j0;
+    \\op[0] = T(acc0); op[1] = T(acc1); op[2] = T(acc2); op[3] = T(acc3);
+;
+
+const MoeDownReduceKey = struct { h: c_int, k: c_int, dtype: mlx.mlx_dtype };
+var moe_down_reduce_kernel: ?mlx.mlx_fast_metal_kernel = null;
+var moe_down_reduce_cfg: ?mlx.mlx_fast_metal_kernel_config = null;
+var moe_down_reduce_key: MoeDownReduceKey = std.mem.zeroes(MoeDownReduceKey);
+var moe_down_reduce_engaged = false;
+var moe_down_reduce_env: ?bool = null;
+pub var moe_down_reduce_override: ?bool = null;
+
+fn moeDownReduceEnabled() bool {
+    if (moe_down_reduce_override) |v| return v;
+    if (moe_down_reduce_env) |v| return v;
+    const raw = std.c.getenv("MLX_SERVE_MOE_DOWN_REDUCE");
+    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
+    moe_down_reduce_env = enabled;
+    return enabled;
+}
+
+fn getMoeDownReduceKernel() !mlx.mlx_fast_metal_kernel {
+    if (moe_down_reduce_kernel) |k| return k;
+    const input_names = [_][*:0]const u8{ "down", "inv", "scores" };
+    const output_names = [_][*:0]const u8{"out"};
+    const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+    defer _ = mlx.mlx_vector_string_free(in_vec);
+    const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+    defer _ = mlx.mlx_vector_string_free(out_vec);
+    const kernel = mlx.mlx_fast_metal_kernel_new("mlxserve_moe_down_reduce", in_vec, out_vec, MOE_DOWN_REDUCE_SOURCE, "", true, false);
+    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+    moe_down_reduce_kernel = kernel;
+    return kernel;
+}
+
+/// Fused down+score+reduce: `sum_k down[inv[t*K+k]] * scores[t,k]` -> [T, hidden].
+/// `down` [T*K, hidden] (SORTED order), `inv` [T*K] int32/uint32 (sorted
+/// position of each flat slot), `scores` [T, K] (same dtype as down). Returns
+/// [T, hidden], or null when the geometry/quant is outside the kernel (caller
+/// keeps the composed chain).
+pub fn moeDownReduceFused(
+    s: mlx.mlx_stream,
+    down: mlx.mlx_array,
+    inv: mlx.mlx_array,
+    scores: mlx.mlx_array,
+    T: c_int,
+    K: c_int,
+    hidden: c_int,
+) !?mlx.mlx_array {
+    if (!moeDownReduceEnabled()) return null;
+    if (!mlx.streamIsGpu(s)) return null;
+    if (K < 1 or K > 64 or hidden < 4 or @rem(hidden, 4) != 0) return null;
+    const xd = mlx.mlx_array_dtype(down);
+    if (xd != .bfloat16 and xd != .float16) return null;
+    if (mlx.mlx_array_dtype(scores) != xd) return null;
+    const inv_dt = mlx.mlx_array_dtype(inv);
+    if (inv_dt != .int32 and inv_dt != .uint32) return null;
+    const dsh = mlx.getShape(down);
+    if (dsh.len != 2 or dsh[1] != hidden) return null;
+    const n_rows: i64 = @as(i64, T) * @as(i64, K);
+    const n_elems: i64 = n_rows * @as(i64, hidden);
+    if (mlx.mlx_array_size(down) != @as(usize, @intCast(n_elems))) return null;
+    if (mlx.mlx_array_size(scores) != @as(usize, @intCast(n_rows))) return null;
+    if (mlx.mlx_array_size(inv) != @as(usize, @intCast(n_rows))) return null;
+
+    // Kernel reads uint32; routing indices arrive as int32/uint32.
+    var inv_u32 = inv;
+    var casted = mlx.mlx_array{ .ctx = null };
+    defer _ = mlx.mlx_array_free(casted);
+    if (inv_dt != .uint32) {
+        try mlx.check(mlx.mlx_astype(&casted, inv, .uint32, s));
+        inv_u32 = casted;
+    }
+
+    const key = MoeDownReduceKey{ .h = hidden, .k = K, .dtype = xd };
+    if (moe_down_reduce_cfg == null or !std.meta.eql(moe_down_reduce_key, key)) {
+        if (moe_down_reduce_cfg) |c| _ = mlx.mlx_fast_metal_kernel_config_free(c);
+        const config = mlx.mlx_fast_metal_kernel_config_new();
+        const out_shape = [_]c_int{ T, hidden };
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &out_shape, 2, xd));
+        // set_grid counts THREADS: one thread per (column-vec4, token).
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(config, @divExact(hidden, 4), T, 1));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(config, 32, 4, 1));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(config, "T", xd));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "H", hidden));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "K", K));
+        moe_down_reduce_cfg = config;
+        moe_down_reduce_key = key;
+    }
+
+    const inputs_arr = [_]mlx.mlx_array{ down, inv_u32, scores };
+    const inputs_vec = mlx.mlx_vector_array_new_data(&inputs_arr, inputs_arr.len);
+    defer _ = mlx.mlx_vector_array_free(inputs_vec);
+    const kernel = try getMoeDownReduceKernel();
+    var outputs_vec = mlx.mlx_vector_array_new();
+    defer _ = mlx.mlx_vector_array_free(outputs_vec);
+    try mlx.check(mlx.mlx_fast_metal_kernel_apply(&outputs_vec, kernel, inputs_vec, moe_down_reduce_cfg.?, s));
+    if (mlx.mlx_vector_array_size(outputs_vec) != 1) return error.MetalKernelBadOutputCount;
+    var out = mlx.mlx_array_new();
+    errdefer _ = mlx.mlx_array_free(out);
+    try mlx.check(mlx.mlx_vector_array_get(&out, outputs_vec, 0));
+    if (!moe_down_reduce_engaged) {
+        moe_down_reduce_engaged = true;
+        log.info("[moe] fused down+score+reduce kernel engaged: T={d} K={d} H={d}\n", .{ T, K, hidden });
+    }
+    return out;
+}
+
 const GateUpCfgKey = struct { topk: c_int, n: c_int, k: c_int, bits: u32, gs: u32, dtype: mlx.mlx_dtype };
 var gateup_cfg: ?mlx.mlx_fast_metal_kernel_config = null;
 var gateup_cfg_key: GateUpCfgKey = std.mem.zeroes(GateUpCfgKey);
@@ -36108,6 +36262,109 @@ test "fused HC prefill up+mix kernel matches the composed up/sigmoid/mean chain"
     const n4bad = try bf16Random(allocator, rnd, s, &.{ 1, 33, HC, 63 }, 2.0, 0.0);
     defer _ = mlx.mlx_array_free(n4bad);
     try testing.expect((try hcUpMixFused(s, bad, n4bad, up.w, up.sc, up.bi, 1, 33, HC, 63, bits, gs)) == null);
+}
+
+test "fused MoE down+score+reduce matches the composed take/multiply/sum chain" {
+    // Reference = take(down, inv, 0) -> [T,K,hidden] -> bf16 multiply by
+    // scores[...,None] -> sum over K. The kernel folds all three into the
+    // gather form with the SAME rounding points (bf16 product, fp32 sum via
+    // MLX's bfloat16-widened Reduce, bf16 out) — see
+    // research/moe_down_reduce_reference.py — so on-device the two differ only
+    // by the fp32 sum's reduction order (<< 1 bf16 ULP).
+    const s = mlx.gpuStream();
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x4C0FFEE + 2);
+    const rnd = prng.random();
+    moe_down_reduce_override = true;
+    defer moe_down_reduce_override = null;
+
+    const bf16Random = struct {
+        fn f(a: std.mem.Allocator, r: std.Random, st: mlx.mlx_stream, shape: []const c_int, scale: f32, offset: f32) !mlx.mlx_array {
+            var n: usize = 1;
+            for (shape) |d| n *= @intCast(d);
+            const buf = try a.alloc(f32, n);
+            defer a.free(buf);
+            for (buf) |*v| v.* = (r.float(f32) - 0.5) * scale + offset;
+            const a32 = mlx.mlx_array_new_data(buf.ptr, shape.ptr, @intCast(shape.len), .float32);
+            defer _ = mlx.mlx_array_free(a32);
+            var out = mlx.mlx_array_new();
+            try mlx.check(mlx.mlx_astype(&out, a32, .bfloat16, st));
+            return out;
+        }
+    }.f;
+
+    const checkClose = struct {
+        fn f(a: std.mem.Allocator, st: mlx.mlx_stream, ref: mlx.mlx_array, val: mlx.mlx_array, n: usize) !void {
+            const rh = try a.alloc(f32, n);
+            defer a.free(rh);
+            const gh = try a.alloc(f32, n);
+            defer a.free(gh);
+            try testReadF32(ref, rh, st);
+            try testReadF32(val, gh, st);
+            var worst: f32 = 0;
+            for (rh, gh) |r, g| {
+                const tol = 0.02 * @abs(r) + 0.008;
+                const diff = @abs(r - g);
+                if (diff > tol and diff / tol > worst) worst = diff / tol;
+            }
+            std.debug.print("moe down+reduce: n={d} worst diff/tol={d:.3}\n", .{ n, worst });
+            if (worst > 0) return error.MoeDownReduceParity;
+        }
+    }.f;
+
+    const cases = [_]struct { t: c_int, k: c_int, h: c_int }{
+        .{ .t = 128, .k = 10, .h = 256 },
+        .{ .t = 33, .k = 4, .h = 64 },
+        .{ .t = 100, .k = 8, .h = 128 },
+    };
+    for (cases) |cs| {
+        const T = cs.t;
+        const K = cs.k;
+        const H = cs.h;
+        const N = T * K;
+        const down = try bf16Random(allocator, rnd, s, &.{ N, H }, 2.0, 0.0);
+        defer _ = mlx.mlx_array_free(down);
+        const scores = try bf16Random(allocator, rnd, s, &.{ T, K }, 2.0, 0.0);
+        defer _ = mlx.mlx_array_free(scores);
+
+        // A real permutation of [0, N): argsort of N random f32 draws.
+        const perm_key = try bf16Random(allocator, rnd, s, &.{N}, 1.0, 0.0);
+        defer _ = mlx.mlx_array_free(perm_key);
+        var inv = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(inv);
+        try mlx.check(mlx.mlx_argsort_axis(&inv, perm_key, 0, s));
+
+        // Composed chain.
+        var down_unsorted = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(down_unsorted);
+        try mlx.check(mlx.mlx_take_axis(&down_unsorted, down, inv, 0, s));
+        const tkh = [_]c_int{ T, K, H };
+        var d3 = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(d3);
+        try mlx.check(mlx.mlx_reshape(&d3, down_unsorted, &tkh, 3, s));
+        var scores_exp = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(scores_exp);
+        try mlx.check(mlx.mlx_expand_dims(&scores_exp, scores, -1, s));
+        var weighted = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(weighted);
+        try mlx.check(mlx.mlx_multiply(&weighted, d3, scores_exp, s));
+        var ref = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(ref);
+        try mlx.check(mlx.mlx_sum_axis(&ref, weighted, 1, false, s));
+
+        const got = (try moeDownReduceFused(s, down, inv, scores, T, K, H)) orelse return error.MoeDownReduceDeclined;
+        defer _ = mlx.mlx_array_free(got);
+        try checkClose(allocator, s, ref, got, @intCast(T * H));
+    }
+
+    // Off-geometry must decline (H=63 not a multiple of 4).
+    const down_bad = try bf16Random(allocator, rnd, s, &.{ 32, 63 }, 2.0, 0.0);
+    defer _ = mlx.mlx_array_free(down_bad);
+    const scores_bad = try bf16Random(allocator, rnd, s, &.{ 4, 8 }, 2.0, 0.0);
+    defer _ = mlx.mlx_array_free(scores_bad);
+    const inv_bad = try bf16Random(allocator, rnd, s, &.{32}, 1.0, 0.0);
+    defer _ = mlx.mlx_array_free(inv_bad);
+    try testing.expect((try moeDownReduceFused(s, down_bad, inv_bad, scores_bad, 4, 8, 63)) == null);
 }
 
 test "fused gate+up+SwiGLU expert kernel is bit-identical to the split gatherQmv path" {
