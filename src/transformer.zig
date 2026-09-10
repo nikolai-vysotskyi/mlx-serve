@@ -37434,6 +37434,8 @@ test "fused HC prefill write+norm matches the composed write+group-norm chain" {
     // the group-norm into the same dispatch (the sum-of-squares reduction order
     // + rsqrt vs the stock rms_norm kernel is the accepted few-bf16-ulp class,
     // same bar as the fused-read parity test). Pure-norm (WR=0) checked too.
+    // Note fast::rms_norm = bf16(bf16(x·rsh)·w) with NO +1 on w (mlx/fast.cpp),
+    // so `ones` is the neutral weight and the norm is exactly T(T(x·rsh)·norm_w).
     const s = mlx.gpuStream();
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0x4C0FFEE + 2);
