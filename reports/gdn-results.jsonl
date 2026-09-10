@@ -1,0 +1,5 @@
+{"tokens":4096,"lanes":8,"median_ms":4.31592,"min_ms":4.23287,"max_ms":5.29512,"max_y":0,"max_state":0,"rmse_y":0}
+{"tokens":4096,"lanes":4,"median_ms":4.11883,"min_ms":4.08633,"max_ms":5.371,"max_y":0.000976562,"max_state":0.000976562,"rmse_y":1.14223e-06}
+{"tokens":4096,"lanes":16,"median_ms":5.40358,"min_ms":5.20988,"max_ms":5.78558,"max_y":0.000976562,"max_state":0.000976562,"rmse_y":1.15334e-06}
+{"tokens":4096,"lanes":2,"median_ms":69.9122,"min_ms":66.5747,"max_ms":70.019,"max_y":0.000976562,"max_state":0.000976562,"rmse_y":1.25688e-06}
+{"tokens":4096,"lanes":32,"median_ms":7.65517,"min_ms":7.55996,"max_ms":8.19637,"max_y":0.000976562,"max_state":0.000976562,"rmse_y":1.17204e-06}

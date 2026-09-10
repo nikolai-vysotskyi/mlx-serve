@@ -1,0 +1,148 @@
+diff --git a/src/transformer.zig b/src/transformer.zig
+index 167e1be..e693b1d 100644
+--- a/src/transformer.zig
++++ b/src/transformer.zig
+@@ -22106,7 +22106,7 @@ pub const Transformer = struct {
+         // gate + beta. The per-channel (KDA) gate never lands here — its
+         // q/k/v layout is the same but the composed path is what its parity
+         // tests pin; the bounded-sigmoid gate arm is composed too.
+-        if (!cfg.kda_vector_gate and !cfg.kdaUsesBoundedGate() and batch * seq_len <= GDN_FUSED_MAX_ROWS and kernel == 4 and ssm.initialized) blk: {
++        if (!cfg.kda_vector_gate and !cfg.kdaUsesBoundedGate() and (batch * seq_len <= GDN_FUSED_MAX_ROWS or (cfg.longCtxGated() and is_prefill and gdnPrefillFusedFor(seq_len, batch))) and kernel == 4 and ssm.initialized) blk: {
+             const pre = (gdnPreworkFused(self.s, .{
+                 .qkv = qkv,
+                 .qkv_off = 0,
+@@ -22405,7 +22405,7 @@ pub const Transformer = struct {
+ 
+         // Fused epilogue: rms_norm(y) * silu(z) straight to the flat
+         // out_proj input (decode/verify widths, per-head swish gate archs).
+-        if (fused_prework) {
++        if (fused_prework or (cfg.longCtxGated() and is_prefill and gdnPrefillFusedFor(seq_len, batch))) {
+             if (self.gdn_eps == null) self.gdn_eps = mlx.mlx_array_new_float(cfg.rms_norm_eps);
+             if (try gdnNormGateFused(self.s, y_bthd, z_proj, 0, value_dim, la.norm_w, self.gdn_eps.?, !cfg.kda_sigmoid_out_gate, num_v_heads, dv, batch, seq_len)) |flat| {
+                 defer _ = mlx.mlx_array_free(flat);
+@@ -28309,6 +28309,15 @@ pub const GdnPrework = struct {
+ };
+ /// Rows (batch*seq) the decode-width GDN fusions serve.
+ pub const GDN_FUSED_MAX_ROWS: c_int = 16;
++var gdn_prefill_fused_override: ?bool = null;
++
++fn gdnPrefillFusedFor(seq: c_int, batch: c_int) bool {
++    if (seq < 10 or batch < 1 or batch > 8192 or seq > @divTrunc(@as(c_int, 8192), batch)) return false;
++    if (gdn_prefill_fused_override) |enabled| return enabled;
++    const raw = std.c.getenv("MLX_SERVE_GDN_PREFILL_FUSED") orelse return false;
++    return std.mem.eql(u8, std.mem.span(raw), "1");
++}
++
+ 
+ /// Inputs of the packed prework. `qkv`/`b`/`a` are read at `(off, stride)`
+ /// per row, so they may all alias one folded in_proj output.
+@@ -28342,7 +28351,7 @@ pub const GdnPreworkArgs = struct {
+ /// installs `conv_state` into the SSM cache entry).
+ pub fn gdnPreworkFused(s: mlx.mlx_stream, in: GdnPreworkArgs) !?GdnPrework {
+     if (!gdnPreworkEnabled()) return null;
+-    if (in.seq < 1 or in.seq > 9 or in.batch < 1 or in.batch * in.seq > GDN_FUSED_MAX_ROWS) return null;
++    if (!gdnPrefillFusedFor(in.seq, in.batch) and (in.seq < 1 or in.seq > 9 or in.batch < 1 or in.batch * in.seq > GDN_FUSED_MAX_ROWS)) return null;
+     if (in.seq < 3 and !gdnDecodeFusedEnabled()) return null;
+     if (in.dk != 128 or in.dv != 128) return null;
+     inline for (.{ in.qkv, in.b, in.a, in.conv_state, in.conv_w, in.dt_bias }) |arr| {
+@@ -28485,7 +28494,8 @@ pub fn gdnNormGateFused(
+     seq: c_int,
+ ) !?mlx.mlx_array {
+     if (!gdnDecodeFusedEnabled()) return null;
+-    if (dv != 128 or seq < 1 or seq > 9 or batch < 1 or batch * seq > GDN_FUSED_MAX_ROWS) return null;
++    if (dv != 128) return null;
++    if (!gdnPrefillFusedFor(seq, batch) and (seq < 1 or seq > 9 or batch < 1 or batch * seq > GDN_FUSED_MAX_ROWS)) return null;
+     inline for (.{ y, z, norm_w }, 0..) |arr, i| {
+         if (mlx.mlx_array_dtype(arr) != .bfloat16) {
+             if (!gdn_normgate_declined) {
+@@ -45221,8 +45231,10 @@ test "qk norm rope fused: bit-identical at the qwen geometry (rd=32, strided pos
+     }
+ }
+ 
+-test "gdn packed prework: bit-identical to the composed chain at S 1..9 incl. gate/beta + folded layout (+ decline gates)" {
++test "gdn packed prework: exact decode and prefill including gates and folded layout" {
+     const s = mlx.gpuStream();
++    gdn_prefill_fused_override = true;
++    defer gdn_prefill_fused_override = null;
+     gdn_prework_override = true;
+     defer gdn_prework_override = null;
+     gdn_decode_fused_override = true;
+@@ -45252,7 +45264,7 @@ test "gdn packed prework: bit-identical to the composed chain at S 1..9 incl. ga
+     const dt_bias = try attn256RandBf16(rnd, &hv_shape, s);
+     defer _ = mlx.mlx_array_free(dt_bias);
+ 
+-    for ([_]c_int{ 1, 2, 3, 5, 9 }) |seq| {
++    for ([_]c_int{ 1, 2, 3, 5, 9, 17, 128, 4096 }) |seq| {
+         const qkv_shape = [_]c_int{ 1, seq, c_dim };
+         const qkv = try attn256RandBf16(rnd, &qkv_shape, s);
+         defer _ = mlx.mlx_array_free(qkv);
+@@ -45533,8 +45545,10 @@ test "gdn packed prework: bit-identical to the composed chain at S 1..9 incl. ga
+     }
+ }
+ 
+-test "gdn norm-gate fused: bit-identical to rms_norm + silu(z) * y at S 1..9, z at a folded offset" {
++test "gdn norm-gate fused: exact decode and prefill with folded z" {
+     const s = mlx.gpuStream();
++    gdn_prefill_fused_override = true;
++    defer gdn_prefill_fused_override = null;
+     gdn_decode_fused_override = true;
+     defer gdn_decode_fused_override = null;
+     var prng = std.Random.DefaultPrng.init(0x9A7E);
+@@ -45549,7 +45563,7 @@ test "gdn norm-gate fused: bit-identical to rms_norm + silu(z) * y at S 1..9, z
+     const eps_arr = mlx.mlx_array_new_float(eps);
+     defer _ = mlx.mlx_array_free(eps_arr);
+ 
+-    for ([_]c_int{ 1, 4, 9 }) |seq| {
++    for ([_]c_int{ 1, 4, 9, 17, 128, 8192 }) |seq| {
+         const y_shape = [_]c_int{ 1, seq, hv, dv };
+         const y = try attn256RandBf16Scaled(rnd, &y_shape, 8.0, s);
+         defer _ = mlx.mlx_array_free(y);
+--- /dev/null
++++ b/tests/test_gdn_prefill_fusions.py
+@@ -0,0 +1,46 @@
++#!/usr/bin/env python3
++"""Exercise chunked Qwen4 state reuse on a disposable server with prefix cache off.
++
++Set MLX_SERVE_GDN_PREFILL_FUSED=1 (or 0), MLX_SERVE_PREFILL_CHUNK=8192,
++then run with --fused on (or off) and --log pointing to that server's log.
++"""
++import argparse
++import json
++from pathlib import Path
++import urllib.request
++
++p = argparse.ArgumentParser()
++p.add_argument('--url', default='http://127.0.0.1:11234')
++p.add_argument('--model', default='ddalcu/Qwen3.8-Flash-Next-MLX-Serve-4bit')
++p.add_argument('--log', type=Path, required=True)
++p.add_argument('--fused', choices=('on', 'off'), required=True)
++args = p.parse_args()
++source = (Path(__file__).resolve().parents[1] / 'src/transformer.zig').read_text()
++corpus = '\n'.join(source.splitlines()[100:900])
++for nonce in ('81492017', '52839106'):
++    prompt = (f'Nonce {nonce}. Remember the passphrase MAGNOLIA-7731.\n'
++              + (corpus * 4)[:40000]
++              + '\nWhat was the passphrase? Answer with the passphrase only.')
++    body = {'model': args.model, 'messages': [{'role': 'user', 'content': prompt}],
++            'temperature': 0, 'seed': 1234, 'max_tokens': 32,
++            'enable_mtp': False, 'enable_pld': False, 'stream': False}
++    req = urllib.request.Request(args.url + '/v1/chat/completions',
++                                 data=json.dumps(body).encode(),
++                                 headers={'Content-Type': 'application/json'})
++    with urllib.request.urlopen(req, timeout=300) as response:
++        result = json.load(response)
++    usage = result['usage']
++    assert usage['prompt_tokens'] > 8192, usage
++    assert usage.get('prompt_tokens_details', {}).get('cached_tokens', 0) == 0, usage
++    answer = result['choices'][0]['message']['content']
++    assert 'MAGNOLIA-7731' in answer, result
++    print(json.dumps({'arm': args.fused, 'usage': usage, 'answer': answer}), flush=True)
++log = args.log.read_text()
++marker = 'wide packed GDN prework'
++import re
++engaged = any(int(s) >= 10 for s in re.findall(r'\[gdn\] packed prework engaged: Hk=\d+ Hv=\d+ S=(\d+)', log))
++if args.fused == 'on':
++    assert engaged, f'Missing engagement: {marker}'
++else:
++    assert not engaged, 'Wide prework engaged with its switch off'
++print('PASS: consecutive long prefill answers and expected wide GDN prework arm')

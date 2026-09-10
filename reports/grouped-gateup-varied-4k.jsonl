@@ -1,0 +1,4 @@
+{"tokens":4096,"BM":0,"WM":2,"WN":2,"median_ms":10.3609,"max_diff":0}
+{"tokens":4096,"BM":32,"WM":2,"WN":2,"median_ms":9.045,"max_diff":0}
+{"tokens":4096,"BM":64,"WM":4,"WN":2,"median_ms":8.37237,"max_diff":0}
+{"tokens":4096,"BM":0,"WM":2,"WN":2,"median_ms":10.513,"max_diff":0}

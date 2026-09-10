@@ -1,0 +1,14 @@
+{"fused":0,"output":0,"max_diff":0}
+{"fused":0,"output":1,"max_diff":0}
+{"fused":0,"output":2,"max_diff":0}
+{"fused":0,"output":3,"max_diff":0}
+{"fused":0,"output":4,"max_diff":0}
+{"fused":0,"output":5,"max_diff":0}
+{"S":8192,"fused":0,"median_ms":3.91867}
+{"fused":1,"output":0,"max_diff":0}
+{"fused":1,"output":1,"max_diff":0}
+{"fused":1,"output":2,"max_diff":0}
+{"fused":1,"output":3,"max_diff":0}
+{"fused":1,"output":4,"max_diff":0}
+{"fused":1,"output":5,"max_diff":0}
+{"S":8192,"fused":1,"median_ms":1.62408}

@@ -1,0 +1,152 @@
+[
+  {
+    "tag": "main-cc7dea1-retry",
+    "short": {
+      "median": 1811.9,
+      "min": 1811.9,
+      "max": 1811.9,
+      "samples": [
+        1811.9
+      ]
+    },
+    "context": [
+      {
+        "targetTokens": 65536,
+        "inputTokens": 68651,
+        "decodeTokPerSec": 62.6,
+        "ttftMs": 44445,
+        "prefillTokPerSec": 1545,
+        "speculative": {
+          "predictableTokPerSec": 63.1,
+          "predictableTokensPerStep": 1.01,
+          "ratio": 1.01,
+          "verdict": "none",
+          "tokensPerStep": 1.01,
+          "note": null
+        },
+        "runs": 1,
+        "note": null
+      }
+    ]
+  },
+  {
+    "tag": "gateup-cc7-on",
+    "short": {
+      "median": 1850.4,
+      "min": 1850.4,
+      "max": 1850.4,
+      "samples": [
+        1850.4
+      ]
+    },
+    "context": [
+      {
+        "targetTokens": 65536,
+        "inputTokens": 68742,
+        "decodeTokPerSec": 66.1,
+        "ttftMs": 40656,
+        "prefillTokPerSec": 1691,
+        "speculative": {
+          "predictableTokPerSec": 67.7,
+          "predictableTokensPerStep": 1.01,
+          "ratio": 1.03,
+          "verdict": "none",
+          "tokensPerStep": 1.01,
+          "note": null
+        },
+        "runs": 1,
+        "note": null
+      }
+    ]
+  },
+  {
+    "tag": "gateup-cc7-off",
+    "short": {
+      "median": 1935.5,
+      "min": 1935.5,
+      "max": 1935.5,
+      "samples": [
+        1935.5
+      ]
+    },
+    "context": [
+      {
+        "targetTokens": 65536,
+        "inputTokens": 68651,
+        "decodeTokPerSec": 67,
+        "ttftMs": 40249,
+        "prefillTokPerSec": 1706,
+        "speculative": {
+          "predictableTokPerSec": 68.4,
+          "predictableTokensPerStep": 1.01,
+          "ratio": 1.02,
+          "verdict": "none",
+          "tokensPerStep": 1.02,
+          "note": null
+        },
+        "runs": 1,
+        "note": null
+      }
+    ]
+  },
+  {
+    "tag": "upstream-2692-8k-repeat",
+    "short": {
+      "median": 1625.3,
+      "min": 1625.3,
+      "max": 1625.3,
+      "samples": [
+        1625.3
+      ]
+    },
+    "context": [
+      {
+        "targetTokens": 65536,
+        "inputTokens": 68539,
+        "decodeTokPerSec": 61.1,
+        "ttftMs": 46960,
+        "prefillTokPerSec": 1460,
+        "speculative": {
+          "predictableTokPerSec": 61,
+          "predictableTokensPerStep": 1.02,
+          "ratio": 1,
+          "verdict": "none",
+          "tokensPerStep": 1.02,
+          "note": null
+        },
+        "runs": 1,
+        "note": null
+      }
+    ]
+  },
+  {
+    "tag": "compact-8k-vs-2692-repeat",
+    "short": {
+      "median": 1684.8,
+      "min": 1684.8,
+      "max": 1684.8,
+      "samples": [
+        1684.8
+      ]
+    },
+    "context": [
+      {
+        "targetTokens": 65536,
+        "inputTokens": 68651,
+        "decodeTokPerSec": 61.3,
+        "ttftMs": 40897,
+        "prefillTokPerSec": 1679,
+        "speculative": {
+          "predictableTokPerSec": 61.1,
+          "predictableTokensPerStep": 1.01,
+          "ratio": 1,
+          "verdict": "none",
+          "tokensPerStep": 1.02,
+          "note": null
+        },
+        "runs": 1,
+        "note": null
+      }
+    ]
+  }
+]
