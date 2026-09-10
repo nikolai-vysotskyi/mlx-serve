@@ -58,9 +58,30 @@ prefix-cache 0, MTP off). Target M5 Max 128 GB; agent runs cloud Linux
   once (asserted); kernel == composed modulo fp32 dot order (exact 0 at small
   configs, ~1e-3 at reduced-prod config; both ~bf16-precision vs f64).
 
+### GDN prework + norm-gate epilogue fusion extended to prefill widths (Lever E)
+- `src/transformer.zig`: `gdnPrefillFusedEnabled` + `GDN_PREFILL_MAX_ROWS`
+  (=8192) + relaxed width gates in `gdnPreworkFused` / `gdnNormGateFused` +
+  `prework_width_ok` in the `gatedDeltaNet` dispatch. Gated
+  `MLX_SERVE_GDN_PREFILL_FUSED=1` (default off). No new kernel — the two decode
+  fusion kernels (already bit-identical-tested at S 1..9) are seq-agnostic and
+  per-row, so the extension is a width gate. Composes with
+  `MLX_SERVE_GDN_CHUNKED=1` (prework → chunked recurrence → norm-gate).
+- Test: `test "gdn packed prework: prefill widths (S 10..64) bit-identical to
+  the composed chain (+ prefill gate)"` — q/k/v/conv_state/g/beta == composed
+  chain at S=10/64; S>9 declines without the opt-in. (Not run on Metal.)
+
+### MoE gate/up correctness guard (this session)
+- The `do_sort` wiring now fuses only when `hidden_act == silu` **and**
+  `swiglu_limit <= 0` **and** no per-expert gate/up bias. The kernel bakes in
+  `silu(gate)*up` (fusedSwiGLU LUT) and cannot add the expert biases the
+  composed chain adds, so the previous unconditional call could silently drop
+  them for gpt_oss-clamp / biased / non-silu archs.
+
 ### Zig validation (runs here)
-- Whole-file `zig ast-check` clean; isolated semantic type-checks EXIT=0 for
-  GDN / HC / MoE production + tests against the `/tmp/zchk` mlx stub.
+- Whole-file `zig ast-check` clean (only the 12 pre-existing
+  `@backingInt`/`@fromBackingInt` invalid-builtin notes, unchanged); isolated
+  semantic type-checks EXIT=0 for the new GDN prefill gate + the MoE gateup
+  wiring guard against the `/tmp/zchk` mlx stub.
 
 ## Not done / blocked
 - **NOT built / run on Metal.** MSL compile + `zig build test` need Apple
@@ -78,7 +99,8 @@ prefix-cache 0, MTP off). Target M5 Max 128 GB; agent runs cloud Linux
   account. Fork push works.
 
 ## Open levers still to pursue (user: keep stacking optimizations)
-Claimed so far: GDN chunkwise (25%) + HC up-mix (part of 15%) + MoE
+Claimed so far: GDN chunkwise (25%) + GDN prework/norm-gate prefill fusion
+(part of the GDN 25% + its proj/epilogue) + HC up-mix (part of 15%) + MoE
 down+reduce (small) + MoE gate/up+GeGLU fusion (part of ~35%, plain-SIMD).
 Remaining: attention/QSA reuse (~23%), HC write side, a NAX perf pass for the
 MoE gate/up and HC up-mix GEMMs (the current ports are plain-SIMD and will
