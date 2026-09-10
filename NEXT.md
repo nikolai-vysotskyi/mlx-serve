@@ -38,7 +38,9 @@ The first `zig build test` on Mac is expected to surface MSL compile errors.
   `MLX_SERVE_GDN_CHUNK_C=<chunk>` to override the chunk size.
 - What it changes: replaces the per-token sequential state recurrence with a
   rank-1 fold per chunk (A_c/B_c), a sequential boundary scan over chunks, and a
-  parallel replay. NOT wired into production dispatch yet (test-seam only).
+  parallel replay. Wired into production dispatch (`gatedDeltaNet`) behind
+  `gdnChunkedEnabled()` + `gdnChunkedEligible()` + bf16-state + staging-budget
+  guards, with the blocked/stock kernel as fallback.
 - CPU evidence: `research/gdn_chunked_reference.py` (f64 golden; f32 chunk error
   == stock) and `research/gdn_chunked_kernel_sim.py` (index-exact sim vs
   f64-validated `chunk_scan`, PASS at T=128/500/1024/2050).
@@ -93,10 +95,11 @@ part of the ≈35% MoE block; removes ~1.3 GB/layer of intermediate traffic)
    Cross-check the fused outputs against `research/*_reference.py` /
    `*_kernel_sim.py` on a fixed seed if any tolerance looks tight.
 
-3. **Wire production dispatch for GDN** (the only lever still test-seam-only):
-   route `gdnForward` through `gdnRunYStateChunked` behind
-   `gdnChunkedEnabled/Eligible` with the blocked kernel as fallback, then re-run
-   the full suite + HTTP regression.
+3. **GDN production dispatch is already wired** (`gatedDeltaNet` routes through
+   `gdnRunYStateChunked` behind `gdnChunkedEnabled/Eligible` + bf16-state +
+   staging-budget guards, blocked/stock fallback). Just re-run the full suite +
+   HTTP regression with `MLX_SERVE_GDN_CHUNKED=1` on the Mac to confirm the
+   parity tests still pass through the production path.
 
 4. **A/B benchmark** (only after the build/tests pass; same machine, same
    conditions, one A/B at a time, baseline = current upstream main with its own

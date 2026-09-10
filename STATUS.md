@@ -51,10 +51,14 @@ prefix-cache 0, MTP off). Target M5 Max 128 GB; agent runs cloud Linux
   and the HC tid bug found by review are exactly what a first Mac build
   surfaces — more may remain. See `NEXT.md`.
 - **No M5 tok/s claim.** All speedups are hypothesis until measured.
-- **GDN production dispatch still deferred** (test-seam only) — wire behind
-  `gdnChunkedEnabled/Eligible` on the Mac once parity passes.
+- **GDN production dispatch now WIRED** behind `gdnChunkedEnabled()` +
+  `gdnChunkedEligible()` + bf16-state + staging-budget guards, with the
+  blocked/stock kernel as fallback (`MLX_SERVE_GDN_CHUNKED=1` engages it).
+  Still needs the parity sweep + continuity test + A/B on Mac.
 - **Issue #366 comment blocked:** bot token read-only on `ddalcu/mlx-serve`
-  (HTTP 403 on POST). Draft at `/tmp/issue366-comment.md`. Fork push works.
+  (HTTP 403 on POST). Draft committed at
+  `research/issue366-comment-2026-09-10.md` — post it from a write-capable
+  account. Fork push works.
 
 ## Open levers still to pursue (user: keep stacking optimizations)
 Claimed so far: GDN chunkwise (25%) + HC up-mix (part of 15%) + MoE
