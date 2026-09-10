@@ -312,13 +312,18 @@ def budget(T, C):
     # A_c/B_c compose C*Dk*(Dk+Dv)
     wy = nch * HV * (C * DK**2 + C**3 + 2 * C**2 * (DK + DV)
                      + C * DK * (DK + DV))
-    naive = nch * HV * C * 2 * DK**3
+    # rank-1 fold (what a real kernel does, NOT dense Dk^3): A_t is a scaled
+    # rank-1 perturbation of I, so the chunk fold is O(C * (Dk^2 + Dk*Dv)) —
+    # it is literally the shipped per-token recurrence run on (Dk + Dv)
+    # basis vectors. ~1.3x the WY FLOP, no CxC solve needed.
+    rank1 = nch * HV * C * (3 * DK**2 + 4 * DK * DV)
     print(f"  per-layer FLOP budget (T={T}, C={C}):")
     print(f"    sequential recurrence : {base/1e9:7.2f} GFLOP, depth {T}")
     print(f"    + WY chunk products   : +{wy/1e9:7.2f} GFLOP ({wy/base:6.2f}x "
           f"the recurrence); depth {T} -> {nch} + {C}")
-    print(f"    (naive Dk^3 fold would be +{naive/1e9:7.1f} GFLOP "
-          f"= {naive/base:5.1f}x)  -> WY is the only viable form\n")
+    print(f"    + rank-1 fold (no solve, simpler kernel): +{rank1/1e9:6.2f} "
+          f"GFLOP ({rank1/base:5.2f}x) = {rank1/wy:4.2f}x the WY FLOP, "
+          f"materializes A_c/B_c (~{nch*HV*(DK*DK+DK*DV)*4/1e6:5.0f} MB/layer)\n")
 
 
 def main():

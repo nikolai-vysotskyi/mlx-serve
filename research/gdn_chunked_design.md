@@ -96,13 +96,26 @@ Sequential recurrence FLOP: `T · Hv · (2·Dk·Dv + Dk·Dv + Dk)`.
 | 8192 | 128 | 19.38 GFLOP | +51.54 GFLOP (2.66×) | 64 + 128                 |
 | 8192 | 256 | 19.38 GFLOP | +96.64 GFLOP (4.99×) | 32 + 256                 |
 
-**C=64 is the default**: matches fla's chunk size, fits the 32 KiB threadgroup
-budget for the C×C `L` matrix, and gives the best depth (≈192 = scan 128 +
-replay 64, plus the ≤64-step solve) at the lowest added FLOP (+1.75×). Naive
-Dk³ fold would be +85.1× — WY is the only viable form. The win is purely the
-dependency-depth reduction (T → ~`2C + T/C`: chunk solve `C`, chunk scan `T/C`,
-intra-chunk replay `C`). FLOPs go *up*, acceptable only because the kernel is
-latency-bound (see §6).
+**C=64 is the default**: matches fla's chunk size and gives the best depth
+(≈192 = scan 128 + replay 64, plus the ≤64-step solve) at the lowest added
+FLOP (+1.75×).
+
+**Two ways to form the chunk product, both validated:**
+1. *WY (fla)* — the C×C solve `(I+L)⁻¹`. Needs a triangular solve in Metal
+   (forward substitution or nilpotent repeated squaring); lowest FLOP
+   (+1.75× @C=64), no A_c materialization.
+2. *Rank-1 fold* — since `A_t = g_t(I − β_t k kᵀ)` is a scaled rank-1
+   perturbation of I, the chunk product is `O(C·(Dk² + Dk·Dv))` ≈ 1.3× the WY
+   FLOP and needs **no solve at all**: it is literally the shipped per-token
+   recurrence run on `(Dk + Dv)` basis vectors (A_c's columns from the Dk unit
+   vectors, B_c's columns from zero state fed by β k vᵀ). This makes the fold
+   kernel a near-copy of `GDN_KERNEL_BLOCKED_BODY`'s inner loop, at the cost of
+   materializing A_c/B_c (~0.8 GB transient per layer at T=8192). A dense
+   Dk³ fold would be +85× — never do that; the rank-1 structure is what makes
+   the fold cheap.
+
+The win is purely the dependency-depth reduction (T → ~`2C + T/C`). FLOPs go
+*up*, acceptable only because the kernel is latency-bound (see §6).
 
 ## 5. Kernel structure (three phases)
 
@@ -147,15 +160,21 @@ clamp applies unchanged). So **C ≤ 64** for a self-contained Phase A, or spill
 
 ## 6. Why this is the right lever (hypothesis, unmeasured)
 
-The block profile (`reports/block-profile.json`, S=8192) puts the GDN
-recurrence at 1115–1298 ms/layer. Its FLOP-equivalent is ~20 GFLOP (~0.4 ms at
-50 TFLOP/s), i.e. the stock kernel runs ~2800× above its FLOP floor — the
-signature of a latency-bound serial chain, not a bandwidth- or FLOP-bound one.
-The existing `GDN_KERNEL_BLOCKED_BODY` fixes the memory-coalescing side
-(~2× per oMLX: 14.9 vs 29.7 ms @16K) but leaves the T-step serial chain. The
-chunked form attacks the chain directly. **Whether the post-blocked kernel is
-still latency-bound — and therefore whether the depth win shows up — must be
-measured on M5.** No claim of tok/s is made from this box.
+The block profile (`reports/block-profile.json`, S=8192) puts the GDN bucket at
+1115–1298 ms/layer. **That profile already includes the blocked-seq kernel**
+(cc7dea1 contains `GDN_KERNEL_BLOCKED_BODY`, default-on): it fixes
+coalescing (~2× per oMLX: 14.9 vs 29.7 ms @16K) but still loops per-token
+serially inside each TB block (confirmed in LOCAL_HISTORY: "blocked-seq kernel
+лишь staging блоков, внутри всё ещё идёт цикл по токенам"). The chunked form
+attacks that remaining serial chain directly, on top of the blocked kernel.
+
+**Open question the kernel must resolve, not the cost model:** how much of the
+1115 ms bucket is the recurrence's serial chain vs. the GDN projections
+(36 dense matmuls — issue #366 puts them at 8% at 4096 tokens) vs. conv/prework.
+The recurrence's FLOP-equivalent is ~20 GFLOP (~0.4 ms at 50 TFLOP/s), so it is
+~2800× above its FLOP floor — latency-bound — but its share of the bucket is
+unmeasured. **Whether the depth win shows up in tok/s must be measured on M5.**
+No claim of tok/s is made from this box.
 
 ## 7. Fallback / geometry contract
 
