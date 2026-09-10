@@ -29,7 +29,7 @@ The first `zig build test` on Mac is expected to surface MSL compile errors.
 
 ---
 
-## 1. The three implemented levers (all opt-in, all OFF by default)
+## 1. The five implemented levers (all opt-in, all OFF by default)
 
 ### Lever A — chunkwise GDN prefill (≈25% of the S=8192 block profile)
 - Files: `src/transformer.zig` (`GDN_CHUNK_KERNEL_{FOLD,SCAN,REPLAY}_BODY`,
@@ -94,6 +94,31 @@ item — drops two gather_qmm launches + the activation per layer)
   exactly once; kernel == composed modulo fp32 dot order — exact 0 at small
   configs, ~1e-3 at reduced-prod config; both ~bf16-precision vs f64).
 - Test: `test "fused prefill gate+up+GeGLU matches gather_qmm + fusedSwiGLU (sorted path)"`.
+- Correctness guard (this session): the `do_sort` wiring now engages the fused
+  kernel only when `hidden_act == silu` **and** `swiglu_limit <= 0` **and** no
+  per-expert gate/up bias — the kernel bakes in `silu(gate)*up` via the
+  `fusedSwiGLU` LUT and has nowhere to add the expert biases the composed chain
+  adds, so fusing under those conditions would silently drop them.
+
+### Lever E — GDN prework + norm-gate epilogue fusion extended to prefill widths
+(the decode fusions already on main are S 1..9 only; this widens them)
+- File: `src/transformer.zig` (`gdnPrefillFusedEnabled`, `GDN_PREFILL_MAX_ROWS`,
+  relaxed width gates in `gdnPreworkFused` / `gdnNormGateFused`, and the
+  `prework_width_ok` production dispatch in `gatedDeltaNet`).
+- Env: `MLX_SERVE_GDN_PREFILL_FUSED=1` (default off, `=0` kill switch). Composes
+  with `MLX_SERVE_GDN_CHUNKED=1`: prework covers the input side (conv+SiLU+
+  split+Q/K norm-and-scale+next conv state+gate+beta in one launch), the
+  chunked recurrence the middle, and the norm-gate epilogue
+  (`rms_norm(y)·silu(z)` → flat out_proj input) the output side.
+- What it changes at prefill: the composed chain launches conv1d, sigmoid,
+  multiply, 3× slice/reshape, 2× rms_norm, 2× multiply, gate (exp/log1p/exp),
+  and sigmoid(b) per layer; the fusions collapse all of that into two kernels
+  (prework + norm-gate) — the SAME kernels already bit-identical-tested at
+  S 1..9, so this is a width gate, not a new kernel. Cap: `batch*seq ≤ 8192`
+  (`GDN_PREFILL_MAX_ROWS`).
+- Test: `test "gdn packed prework: prefill widths (S 10..64) bit-identical to
+  the composed chain (+ prefill gate)"` (pins q/k/v/conv_state/g/beta == the
+  composed chain at S=10 and S=64, and that S>9 declines without the opt-in).
 
 ---
 
@@ -115,6 +140,8 @@ item — drops two gather_qmm launches + the activation per layer)
    MLX_SERVE_HC_UP_MIX=1   zig build test
    MLX_SERVE_MOE_DOWN_REDUCE=1 zig build test
    MLX_SERVE_MOE_GATEUP_FUSED=1 zig build test
+   MLX_SERVE_GDN_PREFILL_FUSED=1 zig build test   # Lever E
+   MLX_SERVE_GDN_CHUNKED=1 MLX_SERVE_GDN_PREFILL_FUSED=1 zig build test  # composed set
    ```
    Cross-check the fused outputs against `research/*_reference.py` /
    `*_kernel_sim.py` on a fixed seed if any tolerance looks tight.
@@ -153,11 +180,14 @@ item — drops two gather_qmm launches + the activation per layer)
 
 ## 3. Honest status (do not overstate)
 
-- All four kernels are **CPU-validated and type-checked, but NOT Metal-built**.
+- All four new kernels (HC up-mix, MoE down+reduce, MoE gateup×2) plus the
+  chunked-GDN three are **CPU-validated and type-checked, but NOT Metal-built**.
+  Lever E adds no new kernel — it widens the two decode GDN fusion kernels to
+  prefill widths behind an opt-in env gate.
 - **No M5 tok/s has been measured.** Depth-reduction (GDN) is the only
-  potentially large algorithmic win; HC/MoE are fusion micro-wins. The 1.5×
-  whole-model target is NOT yet demonstrated and likely needs the set plus the
-  still-open levers below.
+  potentially large algorithmic win; HC/MoE/GDN-fusions are fusion micro-wins.
+  The 1.5× whole-model target is NOT yet demonstrated and likely needs the set
+  plus the still-open levers below.
 
 ## 4. Still open (for whoever continues after M5 validation)
 
