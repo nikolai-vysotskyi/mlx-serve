@@ -476,9 +476,9 @@ fn getGdnKernelBlocked(tb: u32) !mlx.mlx_fast_metal_kernel {
 // MLX_SERVE_GDN_CHUNK_C (32|64|128, default 64). Staging sub-block TB follows
 // gdnBlockTFor exactly (input-width aware: f32 activations clamp to 16).
 //
-// TODO(validation): wire into gdnForward behind gdnChunkedEnabled() +
-// gdnChunkedEligible() with fallback to the blocked kernel, then run the
-// parity sweep + continuity test + a prefillTokPerSec A/B on M5.
+// Wired into gatedDeltaNet behind gdnChunkedEnabled() + gdnChunkedEligible()
+// with fallback to the blocked/stock kernel (see the dispatch site); still
+// needs the parity sweep + continuity test + a prefillTokPerSec A/B on M5.
 
 pub var gdn_chunked_override: ?bool = null;
 var gdn_chunked_env_cached: ?bool = null;
@@ -22961,6 +22961,23 @@ pub const Transformer = struct {
             try mlx.check(mlx.mlx_vector_array_get(&final_state, outputs_vec, 2));
             _ = mlx.mlx_array_free(ssm.ssm_state);
             ssm.ssm_state = final_state;
+        } else if (!vector_gate and gdnChunkedEnabled() and gdnChunkedEligible(seq_len, dk, dv, num_k_heads, num_v_heads) and gdn_state_dtype == .bfloat16 and gdnChunkStagingTbFor(dk, gdn_in_itemsize) != null) {
+            // ── Chunked prefill route (opt-in, MLX_SERVE_GDN_CHUNKED=1) ──
+            // Rank-1 fold + boundary scan + parallel replay instead of the
+            // per-token recurrence. Same geometry contract as the blocked
+            // kernel, plus a bf16 state (the scan writes the boundary state in
+            // bf16) and a staging sub-block that fits the threadgroup budget.
+            // Anything off-contract keeps the blocked/stock kernel below.
+            if (qwen4Standin().gdn_recur) {
+                _ = mlx.mlx_array_free(y_bthd);
+                y_bthd = try standinRef(v_heads);
+            } else {
+                const out = try gdnRunYStateChunked(q_scaled, k_scaled, v_heads, g, beta, ssm.ssm_state, batch, seq_len, num_k_heads, num_v_heads, dk, dv, self.s);
+                _ = mlx.mlx_array_free(y_bthd);
+                y_bthd = out.y;
+                _ = mlx.mlx_array_free(ssm.ssm_state);
+                ssm.ssm_state = out.state;
+            }
         } else {
             const state_shape_out = [_]c_int{ batch, num_v_heads, dv, dk };
             try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &state_shape_out, 4, .bfloat16));
