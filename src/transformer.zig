@@ -18095,49 +18095,57 @@ pub const Transformer = struct {
         const query4 = try self.hcGroupNorm(stream, pw.norm_query, batch, seq_len);
         defer _ = mlx.mlx_array_free(query4);
 
-        var kq = mlx.mlx_array_new();
-        defer _ = mlx.mlx_array_free(kq);
-        try mlx.check(mlx.mlx_multiply(&kq, key4, query4, self.s));
-        var gate = mlx.mlx_array_new();
-        defer _ = mlx.mlx_array_free(gate);
-        try mlx.check(mlx.mlx_sum_axis(&gate, kq, -1, true, self.s)); // [B,S,hc,1]
-        // Scalars in the activation dtype: an f32 scalar promotes the gate
-        // and, through the value product, the whole residual stream.
-        const gate_dt = mlx.mlx_array_dtype(gate);
+        // Scalars in the activation dtype (the gate product key4*query4 keeps
+        // that dtype, so key4 is the right proxy for `gate`): an f32 scalar
+        // would promote the gate and, through the value product, the whole
+        // residual stream.
+        const gate_dt = mlx.mlx_array_dtype(key4);
         const inv_sqrt_h = try scalarOf(1.0 / @sqrt(@as(f32, @floatFromInt(hidden))), gate_dt, self.s);
         defer _ = mlx.mlx_array_free(inv_sqrt_h);
-        var gate_sc = mlx.mlx_array_new();
-        defer _ = mlx.mlx_array_free(gate_sc);
-        try mlx.check(mlx.mlx_multiply(&gate_sc, gate, inv_sqrt_h, self.s));
-        // sqrt(max(|g|, 1e-6)) · sign(g)
-        var g_abs = mlx.mlx_array_new();
-        defer _ = mlx.mlx_array_free(g_abs);
-        try mlx.check(mlx.mlx_abs(&g_abs, gate_sc, self.s));
-        const floor = try scalarOf(1e-6, gate_dt, self.s);
-        defer _ = mlx.mlx_array_free(floor);
-        var g_max = mlx.mlx_array_new();
-        defer _ = mlx.mlx_array_free(g_max);
-        try mlx.check(mlx.mlx_maximum(&g_max, g_abs, floor, self.s));
-        var g_sqrt = mlx.mlx_array_new();
-        defer _ = mlx.mlx_array_free(g_sqrt);
-        try mlx.check(mlx.mlx_sqrt(&g_sqrt, g_max, self.s));
-        var g_sign = mlx.mlx_array_new();
-        defer _ = mlx.mlx_array_free(g_sign);
-        try mlx.check(mlx.mlx_sign(&g_sign, gate_sc, self.s));
-        var g_signed = mlx.mlx_array_new();
-        defer _ = mlx.mlx_array_free(g_signed);
-        try mlx.check(mlx.mlx_multiply(&g_signed, g_sqrt, g_sign, self.s));
-        var g_sig = mlx.mlx_array_new();
-        defer _ = mlx.mlx_array_free(g_sig);
-        try mlx.check(mlx.mlx_sigmoid(&g_sig, g_signed, self.s));
 
-        const v_shape = [_]c_int{ batch, seq_len, 1, hidden };
-        var value4 = mlx.mlx_array_new();
-        defer _ = mlx.mlx_array_free(value4);
-        try mlx.check(mlx.mlx_reshape(&value4, value, &v_shape, 4, self.s));
         var gv4 = mlx.mlx_array_new();
         defer _ = mlx.mlx_array_free(gv4);
-        try mlx.check(mlx.mlx_multiply(&gv4, g_sig, value4, self.s)); // [B,S,hc,hidden]
+        if (try pleGateFused(self.s, key4, query4, value, inv_sqrt_h, batch, seq_len, hc, hidden)) |g4| {
+            // Fused gate + value modulation: gv4 = g_sig * value in one dispatch.
+            try mlx.check(mlx.mlx_array_set(&gv4, g4));
+        } else {
+            var kq = mlx.mlx_array_new();
+            defer _ = mlx.mlx_array_free(kq);
+            try mlx.check(mlx.mlx_multiply(&kq, key4, query4, self.s));
+            var gate = mlx.mlx_array_new();
+            defer _ = mlx.mlx_array_free(gate);
+            try mlx.check(mlx.mlx_sum_axis(&gate, kq, -1, true, self.s)); // [B,S,hc,1]
+            var gate_sc = mlx.mlx_array_new();
+            defer _ = mlx.mlx_array_free(gate_sc);
+            try mlx.check(mlx.mlx_multiply(&gate_sc, gate, inv_sqrt_h, self.s));
+            // sqrt(max(|g|, 1e-6)) · sign(g)
+            var g_abs = mlx.mlx_array_new();
+            defer _ = mlx.mlx_array_free(g_abs);
+            try mlx.check(mlx.mlx_abs(&g_abs, gate_sc, self.s));
+            const floor = try scalarOf(1e-6, gate_dt, self.s);
+            defer _ = mlx.mlx_array_free(floor);
+            var g_max = mlx.mlx_array_new();
+            defer _ = mlx.mlx_array_free(g_max);
+            try mlx.check(mlx.mlx_maximum(&g_max, g_abs, floor, self.s));
+            var g_sqrt = mlx.mlx_array_new();
+            defer _ = mlx.mlx_array_free(g_sqrt);
+            try mlx.check(mlx.mlx_sqrt(&g_sqrt, g_max, self.s));
+            var g_sign = mlx.mlx_array_new();
+            defer _ = mlx.mlx_array_free(g_sign);
+            try mlx.check(mlx.mlx_sign(&g_sign, gate_sc, self.s));
+            var g_signed = mlx.mlx_array_new();
+            defer _ = mlx.mlx_array_free(g_signed);
+            try mlx.check(mlx.mlx_multiply(&g_signed, g_sqrt, g_sign, self.s));
+            var g_sig = mlx.mlx_array_new();
+            defer _ = mlx.mlx_array_free(g_sig);
+            try mlx.check(mlx.mlx_sigmoid(&g_sig, g_signed, self.s));
+
+            const v_shape = [_]c_int{ batch, seq_len, 1, hidden };
+            var value4 = mlx.mlx_array_new();
+            defer _ = mlx.mlx_array_free(value4);
+            try mlx.check(mlx.mlx_reshape(&value4, value, &v_shape, 4, self.s));
+            try mlx.check(mlx.mlx_multiply(&gv4, g_sig, value4, self.s)); // [B,S,hc,hidden]
+        }
         const flat_shape = [_]c_int{ batch, seq_len, hc * hidden };
         var gv = mlx.mlx_array_new();
         defer _ = mlx.mlx_array_free(gv);
@@ -32284,6 +32292,145 @@ pub fn moeDownReduceFused(
     return out;
 }
 
+/// Fused qwen4_exp PLE gate + value modulation (mlxserve_ple_gate). One
+/// 32-lane simdgroup per (row, hc): the H key4*query4 products are rounded to
+/// T (a bf16/f16 product is exact in float) then reduced in fp32 (MLX Reduce
+/// widens bf16 accumulators to float32), the gate chain keeps every bf16
+/// rounding point of the composed chain (inv_sqrt_h -> abs -> max(1e-6) ->
+/// sqrt -> sign -> sigtab sigmoid), and the value broadcast is the last
+/// rounding. The sigmoid is the shared swiglu LUT, so it is bit-exact vs
+/// mlx_sigmoid (no MathMode::Safe transcendental drift). Gate:
+/// MLX_SERVE_PLE_GATE_FUSED=1 (default off); bf16|f16 only, the composed
+/// chain stays the fallback.
+const PLE_GATE_SOURCE =
+    \\// mlxserve_ple_gate: qwen4_exp PLE gate + value modulation in one dispatch.
+    \\const int B = key4_shape[0];
+    \\const int S = key4_shape[1];
+    \\const int hc = key4_shape[2];
+    \\const int H = key4_shape[3];
+    \\
+    \\const int row = int(threadgroup_position_in_grid.x);
+    \\const int c = int(threadgroup_position_in_grid.y);
+    \\const ushort lane = ushort(thread_index_in_simdgroup);
+    \\
+    \\const device T* kp = key4 + ((long)row * hc + c) * H;
+    \\const device T* qp = query4 + ((long)row * hc + c) * H;
+    \\const device T* vp = value + (long)row * H;
+    \\device T* op = out + ((long)row * hc + c) * H;
+    \\
+    \\float acc = 0.0f;
+    \\for (int d = int(lane); d < H; d += 32) {
+    \\    T prod = T(float(kp[d]) * float(qp[d]));
+    \\    acc += float(prod);
+    \\}
+    \\acc = simd_sum(acc);
+    \\
+    \\const T inv = scl;
+    \\const T gate = T(acc);
+    \\const T gate_sc = T(float(gate) * float(inv));
+    \\const float g = float(gate_sc);
+    \\const float a = metal::fabs(g);
+    \\const float m = metal::max(a, float(T(1e-6f)));
+    \\const float r = metal::sqrt(m);
+    \\const float sg = (g > 0.0f) ? 1.0f : ((g < 0.0f) ? -1.0f : 0.0f);
+    \\const T g_sig = sigtab[as_type<ushort>(T(r * sg))];
+    \\
+    \\for (int d = int(lane); d < H; d += 32) {
+    \\    op[d] = T(float(g_sig) * float(vp[d]));
+    \\}
+;
+
+const PleGateKey = struct { rows: c_int, hc: c_int, hidden: c_int, dtype: mlx.mlx_dtype };
+var ple_gate_kernel: ?mlx.mlx_fast_metal_kernel = null;
+var ple_gate_cfg: ?mlx.mlx_fast_metal_kernel_config = null;
+var ple_gate_key: PleGateKey = std.mem.zeroes(PleGateKey);
+var ple_gate_engaged = false;
+var ple_gate_env: ?bool = null;
+pub var ple_gate_override: ?bool = null;
+
+fn pleGateFusedEnabled() bool {
+    if (ple_gate_override) |v| return v;
+    if (ple_gate_env) |v| return v;
+    const raw = std.c.getenv("MLX_SERVE_PLE_GATE_FUSED");
+    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
+    ple_gate_env = enabled;
+    return enabled;
+}
+
+fn getPleGateKernel() !mlx.mlx_fast_metal_kernel {
+    if (ple_gate_kernel) |k| return k;
+    const input_names = [_][*:0]const u8{ "key4", "query4", "value", "scl", "sigtab" };
+    const output_names = [_][*:0]const u8{"out"};
+    const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+    defer _ = mlx.mlx_vector_string_free(in_vec);
+    const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+    defer _ = mlx.mlx_vector_string_free(out_vec);
+    const kernel = mlx.mlx_fast_metal_kernel_new("mlxserve_ple_gate", in_vec, out_vec, PLE_GATE_SOURCE, "", true, false);
+    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+    ple_gate_kernel = kernel;
+    return kernel;
+}
+
+/// Fused PLE gate + value modulation: `gv4 = g_sig * value` with
+/// `g_sig = sigmoid(sqrt(max(|sum_d(key4*query4)*inv_sqrt_h|, 1e-6)) * sign(..))`.
+/// key4/query4 [B,S,hc,H], value [B,S,H], inv_sqrt_h 0-dim scalar (same dtype
+/// as key4, read as `constant T&`). Returns gv4 [B,S,hc,H], or null when the
+/// dtype/geometry is outside the kernel (caller keeps the composed chain).
+pub fn pleGateFused(
+    s: mlx.mlx_stream,
+    key4: mlx.mlx_array,
+    query4: mlx.mlx_array,
+    value: mlx.mlx_array,
+    inv_sqrt_h: mlx.mlx_array,
+    batch: c_int,
+    seq_len: c_int,
+    hc: c_int,
+    hidden: c_int,
+) !?mlx.mlx_array {
+    if (!pleGateFusedEnabled()) return null;
+    if (!mlx.streamIsGpu(s)) return null;
+    const dt = mlx.mlx_array_dtype(key4);
+    if (dt != .bfloat16 and dt != .float16) return null;
+    if (mlx.mlx_array_dtype(query4) != dt or mlx.mlx_array_dtype(value) != dt) return null;
+    if (mlx.mlx_array_dtype(inv_sqrt_h) != dt) return null;
+    const ksh = mlx.getShape(key4);
+    if (ksh.len != 4 or ksh[0] != batch or ksh[1] != seq_len or ksh[2] != hc or ksh[3] != hidden) return null;
+    const vsh = mlx.getShape(value);
+    if (vsh.len != 3 or vsh[0] != batch or vsh[1] != seq_len or vsh[2] != hidden) return null;
+
+    const sigtab = try swigluSigTable(s, dt, std.heap.c_allocator);
+    const rows: c_int = batch * seq_len;
+    const key = PleGateKey{ .rows = rows, .hc = hc, .hidden = hidden, .dtype = dt };
+    if (ple_gate_cfg == null or !std.meta.eql(ple_gate_key, key)) {
+        if (ple_gate_cfg) |c| _ = mlx.mlx_fast_metal_kernel_config_free(c);
+        const config = mlx.mlx_fast_metal_kernel_config_new();
+        const out_shape = [_]c_int{ batch, seq_len, hc, hidden };
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &out_shape, 4, dt));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(config, rows, hc, 1));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(config, 32, 1, 1));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(config, "T", dt));
+        ple_gate_cfg = config;
+        ple_gate_key = key;
+    }
+
+    const inputs_arr = [_]mlx.mlx_array{ key4, query4, value, inv_sqrt_h, sigtab };
+    const inputs_vec = mlx.mlx_vector_array_new_data(&inputs_arr, inputs_arr.len);
+    defer _ = mlx.mlx_vector_array_free(inputs_vec);
+    const kernel = try getPleGateKernel();
+    var outputs_vec = mlx.mlx_vector_array_new();
+    defer _ = mlx.mlx_vector_array_free(outputs_vec);
+    try mlx.check(mlx.mlx_fast_metal_kernel_apply(&outputs_vec, kernel, inputs_vec, ple_gate_cfg.?, s));
+    if (mlx.mlx_vector_array_size(outputs_vec) != 1) return error.MetalKernelBadOutputCount;
+    var out = mlx.mlx_array_new();
+    errdefer _ = mlx.mlx_array_free(out);
+    try mlx.check(mlx.mlx_vector_array_get(&out, outputs_vec, 0));
+    if (!ple_gate_engaged) {
+        ple_gate_engaged = true;
+        log.info("[ple] fused gate+value-modulation kernel engaged: rows={d} hc={d} H={d}\n", .{ rows, hc, hidden });
+    }
+    return out;
+}
+
 // ── Prefill MoE fused gate/up + GeGLU (sorted path, plain-SIMD) ──
 //
 // The sorted prefill path runs two gather_qmm calls (gate, up) into [Ntot, N]
@@ -37891,6 +38038,100 @@ test "fused HC prefill write+norm matches the composed write+group-norm chain" {
     hc_writenorm_override = true;
     // Decline: H not a multiple of 256.
     try testing.expect((try hcWriteNormFused(s, stream, out, inj, norm_w, eps, 1, rows, HC, 100)) == null);
+}
+
+test "fused PLE gate+value-modulation matches the composed kq/gate/sigmoid/mul chain" {
+    if (mlx.noGpuBackend()) return error.SkipZigTest;
+    const s = mlx.gpuStream();
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x0BADC0DE + 7);
+    const rnd = prng.random();
+    ple_gate_override = true;
+    defer ple_gate_override = null;
+
+    const B: c_int = 1;
+    const S: c_int = 8;
+    const HC: c_int = 4;
+    const H: c_int = 256;
+    const bf16Random = struct {
+        fn f(a: std.mem.Allocator, r: std.Random, st: mlx.mlx_stream, shape: []const c_int, scale: f32) !mlx.mlx_array {
+            var n: usize = 1;
+            for (shape) |d| n *= @intCast(d);
+            const buf = try a.alloc(f32, n);
+            defer a.free(buf);
+            for (buf) |*v| v.* = (r.float(f32) - 0.5) * scale;
+            const a32 = mlx.mlx_array_new_data(buf.ptr, shape.ptr, @intCast(shape.len), .float32);
+            defer _ = mlx.mlx_array_free(a32);
+            var out = mlx.mlx_array_new();
+            try mlx.check(mlx.mlx_astype(&out, a32, .bfloat16, st));
+            return out;
+        }
+    }.f;
+
+    const k4_shape = [_]c_int{ B, S, HC, H };
+    const v_shape = [_]c_int{ B, S, H };
+    const key4 = try bf16Random(allocator, rnd, s, &k4_shape, 0.6);
+    defer _ = mlx.mlx_array_free(key4);
+    const query4 = try bf16Random(allocator, rnd, s, &k4_shape, 0.6);
+    defer _ = mlx.mlx_array_free(query4);
+    const value = try bf16Random(allocator, rnd, s, &v_shape, 0.6);
+    defer _ = mlx.mlx_array_free(value);
+
+    const inv_sqrt_h = try scalarOf(1.0 / @sqrt(@as(f32, @floatFromInt(H))), .bfloat16, s);
+    defer _ = mlx.mlx_array_free(inv_sqrt_h);
+
+    // Composed chain (pleForward's fallback): kq -> gate -> g_sig -> gv4.
+    var kq = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(kq);
+    try mlx.check(mlx.mlx_multiply(&kq, key4, query4, s));
+    var gate = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(gate);
+    try mlx.check(mlx.mlx_sum_axis(&gate, kq, -1, true, s));
+    var gate_sc = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(gate_sc);
+    try mlx.check(mlx.mlx_multiply(&gate_sc, gate, inv_sqrt_h, s));
+    var g_abs = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(g_abs);
+    try mlx.check(mlx.mlx_abs(&g_abs, gate_sc, s));
+    const floor = try scalarOf(1e-6, .bfloat16, s);
+    defer _ = mlx.mlx_array_free(floor);
+    var g_max = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(g_max);
+    try mlx.check(mlx.mlx_maximum(&g_max, g_abs, floor, s));
+    var g_sqrt = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(g_sqrt);
+    try mlx.check(mlx.mlx_sqrt(&g_sqrt, g_max, s));
+    var g_sign = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(g_sign);
+    try mlx.check(mlx.mlx_sign(&g_sign, gate_sc, s));
+    var g_signed = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(g_signed);
+    try mlx.check(mlx.mlx_multiply(&g_signed, g_sqrt, g_sign, s));
+    var g_sig = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(g_sig);
+    try mlx.check(mlx.mlx_sigmoid(&g_sig, g_signed, s));
+    const v4_shape = [_]c_int{ B, S, 1, H };
+    var value4 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(value4);
+    try mlx.check(mlx.mlx_reshape(&value4, value, &v4_shape, 4, s));
+    var ref = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(ref);
+    try mlx.check(mlx.mlx_multiply(&ref, g_sig, value4, s));
+
+    const fused = (try pleGateFused(s, key4, query4, value, inv_sqrt_h, B, S, HC, H)) orelse return error.PleGateDeclined;
+    defer _ = mlx.mlx_array_free(fused);
+    const d = try maxAbsDiffF32(ref, fused, s);
+    std.debug.print("ple gate max|fused-composed|={e}\n", .{d});
+    // Same rounding points; the only freedom is the f32 reduce order (simd vs
+    // MLX tree) + sqrt, so the bar is a few bf16 ulps (gv4 is O(0.5)).
+    try testing.expect(d < 0.02);
+
+    // Decline: opt-in off.
+    ple_gate_override = false;
+    try testing.expect((try pleGateFused(s, key4, query4, value, inv_sqrt_h, B, S, HC, H)) == null);
+    ple_gate_override = true;
+    // Decline: value shape mismatch (wrong seq).
+    try testing.expect((try pleGateFused(s, key4, query4, value, inv_sqrt_h, B, S + 1, HC, H)) == null);
 }
 
 test "fused MoE down+score+reduce matches the composed take/multiply/sum chain" {

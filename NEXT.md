@@ -29,7 +29,7 @@ The first `zig build test` on Mac is expected to surface MSL compile errors.
 
 ---
 
-## 1. The seven implemented levers (all opt-in, all OFF by default)
+## 1. The eight implemented levers (all opt-in, all OFF by default)
 
 ### Lever A — chunkwise GDN prefill (≈25% of the S=8192 block profile)
 - Files: `src/transformer.zig` (`GDN_CHUNK_KERNEL_{FOLD,SCAN,REPLAY}_BODY`,
@@ -172,6 +172,26 @@ attention block, beyond the upstream gather/score win)
   composed reference"` (grp vs `attn256Reference` within the stock bar, grp vs
   stock < 1e-2) + `test "gatherQsa256 grouped: geometry gate"`.
 
+### Lever H — fused PLE gate + value modulation (qwen4_exp spec-capture PLE;
+small — the PLE block's cost is its key/value qmatmuls + dilated conv, not the
+~10 elementwise gate dispatches this folds)
+- File: `src/transformer.zig` (`PLE_GATE_SOURCE`, `pleGateFused`,
+  `pleGateFusedEnabled`, `getPleGateKernel`, `PleGateKey` cache), wired into
+  `pleForward` (qwen4_exp per-layer loop, after `hcFlush`) behind an opt-in,
+  composed chain as fallback.
+- Env: `MLX_SERVE_PLE_GATE_FUSED=1` (default off, `=0` kill switch).
+- What it changes: one per-(row, hc) dispatch (32-lane simdgroup) folds
+  `kq=key4*query4` → sum → `*inv_sqrt_h` → `sqrt(max(|·|,1e-6))·sign` → LUT
+  sigmoid → `*value`. fp32 reduction (MLX Reduce widens bf16 accumulators),
+  every bf16 rounding point preserved (the max of two bf16 values is exactly
+  bf16-representable, so the skipped intermediates are no-ops — bit-exact),
+  sigmoid is the shared `swigluSigTable` LUT. `inv_sqrt_h` is a 0-dim scalar
+  read as `constant T&` (MLX `write_signature`: ndim==0 → reference).
+- CPU evidence: `research/ple_gate_reference.py` PASS (gate [0.3672,0.6406],
+  drift 2.089e-3 vs pure-f32).
+- Test: `test "fused PLE gate+value-modulation matches the composed
+  kq/gate/sigmoid/mul chain"`.
+
 ---
 
 ## 2. What to do on the Mac (in order)
@@ -197,6 +217,7 @@ attention block, beyond the upstream gather/score win)
    MLX_SERVE_HC_WRITE_NORM=1 zig build test       # Lever F
    MLX_SERVE_QSA_GROUP=1 zig build test           # Lever G (grouped QSA gather)
    MLX_SERVE_QSA_GROUP=1 MLX_SERVE_QSA_GROUP_G=8 zig build test  # G=8 variant
+   MLX_SERVE_PLE_GATE_FUSED=1 zig build test      # Lever H (PLE gate fusion)
    ```
    Cross-check the fused outputs against `research/*_reference.py` /
    `*_kernel_sim.py` on a fixed seed if any tolerance looks tight.
@@ -235,9 +256,9 @@ attention block, beyond the upstream gather/score win)
 
 ## 3. Honest status (do not overstate)
 
-- All seven new kernels (HC up-mix, HC write+norm, MoE down+reduce, MoE
-  gateup×2, the chunked-GDN three, and the grouped-QSA gather) are
-  **CPU-validated and type-checked, but NOT Metal-built**. Lever E adds no new
+- All eight new kernels (HC up-mix, HC write+norm, MoE down+reduce, MoE
+  gateup×2, the chunked-GDN three, the grouped-QSA gather, and the PLE gate
+  fusion) are **CPU-validated and type-checked, but NOT Metal-built**. Lever E adds no new
   kernel — it widens the two decode GDN fusion kernels to prefill widths behind
   an opt-in env gate. Lever F's write arm is bit-exact by construction (it
   shares the fused-read N kernel's rounding); its norm arm is the same few-ulp
