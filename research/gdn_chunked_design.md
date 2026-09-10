@@ -9,7 +9,10 @@ cloud box).
 Evidence levels (per the task's labeling rule):
 - **Reference test** (this doc + `gdn_chunked_reference.py`): the chunkwise/WY
   reformulation is the *same recurrence* (f64 max-diff ~1e-15) and the f32 form
-  passes the repo's parity bar with error bit-identical to the stock kernel.
+  passes the repo's parity bar with error *equal to* the stock kernel (the
+  chunk forms differ from stock by ~1–2 bf16 ULP after the chunk-boundary
+  re-association, but their distance to the f64 ground truth is the same —
+  which is exactly what the repo bar measures, "no worse than stock").
 - **Hypothesis**: that shortening the serial dependency chain `T → ~C + T/C`
   yields an M5 prefill speedup. Not yet measured.
 
@@ -69,11 +72,14 @@ the bf16-truncated outputs. Results (Dk=Dv=128, Hk=16, Hv=48, GQA=3):
 | 2048  | 128 | 2.59e-2     | 2.59e-2    | 2.59e-2       | 5.89e-2      | PASS    |
 | 2048  | 256 | 2.59e-2     | 2.59e-2    | 2.59e-2       | 5.89e-2      | PASS    |
 
-State errors are likewise bit-identical (3.89e-3 / 3.84e-3) across all arms.
-Both the naive O(Dk³) fold and the WY O(C·Dk²) form produce *bit-identical*
-outputs to the stock kernel after bf16 truncation — the chunk-boundary
-re-association is absorbed by the bf16 state hand-off (same tolerance class as
-the existing "chunk-boundary continuity" test: `0.02·max|state| + 0.02`).
+State errors are likewise equal (3.89e-3 / 3.84e-3) across all arms. The naive
+O(Dk³) fold and the WY O(C·Dk²) form produce the *same error magnitude* as the
+stock kernel after bf16 truncation, but not bit-identical values: the
+chunk-boundary re-association (one `A_c M + B_c` compose vs T per-token
+updates) rounds differently by ~1–2 bf16 ULP (measured max|Δ| = 3.9e-3 in y,
+9.8e-4 in state at magnitude ~1). This is the same tolerance class the existing
+"chunk-boundary continuity" test already accepts (`0.02·max|state| + 0.02`),
+and the repo parity bar is "no worse than stock vs f64" — not bit-equality.
 
 f64 exactness of the block form vs sequential: y 2.0e-15 / state 6.1e-16
 (chunk-scan), y 6.3e-15 / state 4.1e-15 (WY).
