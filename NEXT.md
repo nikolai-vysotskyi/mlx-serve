@@ -29,7 +29,7 @@ The first `zig build test` on Mac is expected to surface MSL compile errors.
 
 ---
 
-## 1. The five implemented levers (all opt-in, all OFF by default)
+## 1. The six implemented levers (all opt-in, all OFF by default)
 
 ### Lever A — chunkwise GDN prefill (≈25% of the S=8192 block profile)
 - Files: `src/transformer.zig` (`GDN_CHUNK_KERNEL_{FOLD,SCAN,REPLAY}_BODY`,
@@ -120,6 +120,28 @@ item — drops two gather_qmm launches + the activation per layer)
   the composed chain (+ prefill gate)"` (pins q/k/v/conv_state/g/beta == the
   composed chain at S=10 and S=64, and that S>9 declines without the opt-in).
 
+### Lever F — fused HC write + group-norm (the HC write side, prefill)
+- File: `src/transformer.zig` (`HC_WRITE_NORM_SOURCE`, `hcWriteNormFused`,
+  `hcWriteNormEnabled`, `HC_WRITE_NORM_MAX_ROWS`), wired into `hcRead` /
+  `hcReadPending` / `hcWriteOrDefer` (the write is now deferred to the next
+  read at prefill too, behind the opt-in, and `hcRead` was split into a
+  `hcReadTail` the fused norm feeds).
+- Env: `MLX_SERVE_HC_WRITE_NORM=1` (default off, `=0` kill switch). Gated to
+  hc 1..8 / H%256==0 / bf16|f16 / batch*seq <= HC_WRITE_NORM_MAX_ROWS=8192.
+- What it changes: the composed chain materializes the write `stream += out*inj`
+  (reshape + broadcast multiply + add + reshape: two [B,S,hc,H] intermediates)
+  and the NEXT read's group-norm re-reads the written stream (reshape +
+  fast_rms_norm(ones) + ×norm_w). The kernel folds both into ONE per-(row,
+  stream) dispatch — the write uses the chain's exact two roundings
+  (T(out·inj), then T(stream+that)), so the written stream is BIT-identical;
+  the norm `T(T(x·rsqrt(mean+eps))·norm_w)` differs from the stock rms_norm
+  only by the sum-of-squares reduction order + rsqrt (the accepted few-bf16-ulp
+  class, same bar as the fused-read parity test). Also serves the pure-norm arm
+  (WR=0) so the prefill group-norm is one dispatch even without a pending write.
+- Test: `test "fused HC prefill write+norm matches the composed
+  write+group-norm chain"` (write bit-exact, norm within the ulp bar, WR=0 arm,
+  opt-in-off + H%256 declines).
+
 ---
 
 ## 2. What to do on the Mac (in order)
@@ -142,6 +164,7 @@ item — drops two gather_qmm launches + the activation per layer)
    MLX_SERVE_MOE_GATEUP_FUSED=1 zig build test
    MLX_SERVE_GDN_PREFILL_FUSED=1 zig build test   # Lever E
    MLX_SERVE_GDN_CHUNKED=1 MLX_SERVE_GDN_PREFILL_FUSED=1 zig build test  # composed set
+   MLX_SERVE_HC_WRITE_NORM=1 zig build test       # Lever F
    ```
    Cross-check the fused outputs against `research/*_reference.py` /
    `*_kernel_sim.py` on a fixed seed if any tolerance looks tight.
@@ -180,10 +203,12 @@ item — drops two gather_qmm launches + the activation per layer)
 
 ## 3. Honest status (do not overstate)
 
-- All four new kernels (HC up-mix, MoE down+reduce, MoE gateup×2) plus the
-  chunked-GDN three are **CPU-validated and type-checked, but NOT Metal-built**.
-  Lever E adds no new kernel — it widens the two decode GDN fusion kernels to
-  prefill widths behind an opt-in env gate.
+- All six new kernels (HC up-mix, HC write+norm, MoE down+reduce, MoE
+  gateup×2, plus the chunked-GDN three) are **CPU-validated and type-checked,
+  but NOT Metal-built**. Lever E adds no new kernel — it widens the two decode
+  GDN fusion kernels to prefill widths behind an opt-in env gate. Lever F's
+  write arm is bit-exact by construction (it shares the fused-read N kernel's
+  rounding); its norm arm is the same few-ulp class as that N kernel.
 - **No M5 tok/s has been measured.** Depth-reduction (GDN) is the only
   potentially large algorithmic win; HC/MoE/GDN-fusions are fusion micro-wins.
   The 1.5× whole-model target is NOT yet demonstrated and likely needs the set
@@ -198,5 +223,6 @@ item — drops two gather_qmm launches + the activation per layer)
   Mac but had no whole-model proof — swap the plain-SIMD inner loop for the
   NAX outer-product form and re-measure if Lever D / B under-deliver.
 - **Attention/QSA** (~23%): QSA gather/score already upstream (#388); look for
-  block-reuse / query-grouping, not re-counting the upstream win.
-- **HC write side**.
+  block-reuse / query-grouping (adjacent queries re-load overlapping selected
+  key blocks from HBM — a grouped-query kernel could load each distinct block
+  once), not re-counting the upstream win.

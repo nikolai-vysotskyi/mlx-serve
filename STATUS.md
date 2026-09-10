@@ -77,11 +77,26 @@ prefix-cache 0, MTP off). Target M5 Max 128 GB; agent runs cloud Linux
   composed chain adds, so the previous unconditional call could silently drop
   them for gpt_oss-clamp / biased / non-silu archs.
 
+### HC write + group-norm fusion (Lever F, the HC write side)
+- `mlxserve_hc_write_norm` kernel + `hcWriteNormFused` (write folded when
+  `out`/`inj` set, else pure norm), gated `MLX_SERVE_HC_WRITE_NORM=1`; wired
+  into `hcRead` (pure-norm arm) + `hcReadPending` (deferred-write arm) +
+  `hcWriteOrDefer` (defer at prefill), with `hcRead` split into `hcReadTail`.
+  Cap `HC_WRITE_NORM_MAX_ROWS=8192`; H%256==0 / hc 1..8 / bf16|f16.
+- Folds the write's two [B,S,hc,H] intermediates AND the next read's norm into
+  one per-(row, stream) dispatch. Write arm shares the decode fused-read N
+  kernel's exact roundings (T(out·inj), then T(stream+that)) so the written
+  stream is bit-identical; norm arm is the accepted few-bf16-ulp class.
+- Test: `test "fused HC prefill write+norm matches the composed
+  write+group-norm chain"` (write exact, norm within the ulp bar, WR=0 arm,
+  gate-off + H%256 declines). (Not run on Metal.)
+
 ### Zig validation (runs here)
 - Whole-file `zig ast-check` clean (only the 12 pre-existing
   `@backingInt`/`@fromBackingInt` invalid-builtin notes, unchanged); isolated
   semantic type-checks EXIT=0 for the new GDN prefill gate + the MoE gateup
-  wiring guard against the `/tmp/zchk` mlx stub.
+  wiring guard + the HC write+norm kernel/wiring/test against the `/tmp/zchk`
+  mlx stub.
 
 ## Not done / blocked
 - **NOT built / run on Metal.** MSL compile + `zig build test` need Apple
@@ -100,9 +115,10 @@ prefix-cache 0, MTP off). Target M5 Max 128 GB; agent runs cloud Linux
 
 ## Open levers still to pursue (user: keep stacking optimizations)
 Claimed so far: GDN chunkwise (25%) + GDN prework/norm-gate prefill fusion
-(part of the GDN 25% + its proj/epilogue) + HC up-mix (part of 15%) + MoE
-down+reduce (small) + MoE gate/up+GeGLU fusion (part of ~35%, plain-SIMD).
-Remaining: attention/QSA reuse (~23%), HC write side, a NAX perf pass for the
-MoE gate/up and HC up-mix GEMMs (the current ports are plain-SIMD and will
-need it to matter at prefill scale). None of the individual levers reaches
-1.5× alone.
+(part of the GDN 25% + its proj/epilogue) + HC up-mix (part of 15%) + HC
+write+group-norm (part of 15%) + MoE down+reduce (small) + MoE gate/up+GeGLU
+fusion (part of ~35%, plain-SIMD).
+Remaining: attention/QSA reuse (~23%; grouped-query block-reuse, not
+re-counting the upstream gather/score), a NAX perf pass for the MoE gate/up
+and HC up-mix GEMMs (the current ports are plain-SIMD and will need it to
+matter at prefill scale). None of the individual levers reaches 1.5× alone.

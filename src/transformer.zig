@@ -17391,6 +17391,16 @@ pub const Transformer = struct {
                 h.* = o.stream;
                 return .{ .mixed = o.mixed, .inj = o.inj };
             }
+            // Prefill-width fused write+group-norm (opt-in): fold the pending
+            // `stream += out*inj` into this read's norm, one dispatch for both.
+            const hc: c_int = @intCast(self.config.hc_count);
+            const hidden: c_int = @intCast(self.config.hidden_size);
+            if (try hcWriteNormFused(self.s, h.*, pd.out, pd.inj, w.norm_w, self.config.rms_norm_eps, batch, seq_len, hc, hidden)) |wn| {
+                _ = mlx.mlx_array_free(h.*);
+                h.* = wn.stream;
+                defer _ = mlx.mlx_array_free(wn.n4);
+                return self.hcReadTail(wn.n4, w, batch, seq_len);
+            }
             h.* = try self.hcWrite(h.*, pd.out, pd.inj, batch, seq_len);
         }
         return self.hcRead(h.*, w, batch, seq_len);
@@ -17407,10 +17417,13 @@ pub const Transformer = struct {
     }
 
     /// Defer `stream += out * inj` to the next read when the fused read will
-    /// take it (decode/verify/batched widths); otherwise write now.
+    /// take it (decode/verify/batched widths) or the fused write+norm will
+    /// (prefill widths, opt-in); otherwise write now.
     fn hcWriteOrDefer(self: *Transformer, h: *mlx.mlx_array, out: mlx.mlx_array, inj: mlx.mlx_array, batch: c_int, seq_len: c_int, pending: *?HcPending) !void {
         std.debug.assert(pending.* == null);
-        if (batch * seq_len <= HC_FUSED_MAX_ROWS and hcFusedEnabled() and mlx.mlx_array_dtype(h.*) == mlx.mlx_array_dtype(out)) {
+        const defer_fused = batch * seq_len <= HC_FUSED_MAX_ROWS and hcFusedEnabled();
+        const defer_wn = hcWriteNormEnabled() and batch * seq_len <= HC_WRITE_NORM_MAX_ROWS;
+        if ((defer_fused or defer_wn) and mlx.mlx_array_dtype(h.*) == mlx.mlx_array_dtype(out)) {
             var pd: HcPending = undefined;
             pd.out = mlx.mlx_array_new();
             errdefer _ = mlx.mlx_array_free(pd.out);
@@ -17456,8 +17469,23 @@ pub const Transformer = struct {
         const hc: c_int = @intCast(self.config.hc_count);
         const hidden: c_int = @intCast(self.config.hidden_size);
         if (try self.hcReadFusedFor(stream, w, batch, seq_len, null)) |o| return .{ .mixed = o.mixed, .inj = o.inj };
-        const n4 = try self.hcGroupNorm(stream, w.norm_w, batch, seq_len);
+        // Prefill-width fused group-norm (opt-in): rms · norm_w in one dispatch
+        // (the write+norm arm folds the deferred write in via hcReadPending).
+        var n4: mlx.mlx_array = undefined;
+        if (try hcWriteNormFused(self.s, stream, .{ .ctx = null }, .{ .ctx = null }, w.norm_w, self.config.rms_norm_eps, batch, seq_len, hc, hidden)) |wn| {
+            n4 = wn.n4;
+        } else {
+            n4 = try self.hcGroupNorm(stream, w.norm_w, batch, seq_len);
+        }
         defer _ = mlx.mlx_array_free(n4);
+        return self.hcReadTail(n4, w, batch, seq_len);
+    }
+
+    /// Tail of the composed prefill HC read once `n4` ([B,S,hc,H] group-norm
+    /// output) is known: down qmm → silu → up/mix → inject. Caller owns `n4`.
+    fn hcReadTail(self: *Transformer, n4: mlx.mlx_array, w: *const HcWeights, batch: c_int, seq_len: c_int) !HcRead {
+        const hc: c_int = @intCast(self.config.hc_count);
+        const hidden: c_int = @intCast(self.config.hidden_size);
         const flat_shape = [_]c_int{ batch, seq_len, hc * hidden };
         var n_flat = mlx.mlx_array_new();
         defer _ = mlx.mlx_array_free(n_flat);
@@ -31582,6 +31610,192 @@ pub fn hcUpMixFused(
     return mixed;
 }
 
+// ── Prefill HC write + group-norm fusion ──
+//
+// At prefill the composed chain materializes the write `stream += out*inj`
+// (reshape + broadcast multiply + add + reshape: two [B,S,hc,H] intermediates)
+// and the NEXT read's group-norm then re-reads that written stream (reshape +
+// fast_rms_norm with a ones weight + ×norm_w). This kernel folds both into one
+// per-(row, stream) dispatch: it applies the write with the chain's exact two
+// roundings (T(out·inj), then T(stream + that) — identical to the decode-width
+// fused read's N-kernel WR path), reduces the sum of squares over the stream,
+// and emits BOTH the persistent written stream and the scaled norm
+// `T(T(x·rsqrt(mean+eps))·norm_w)` — the same expression the composed
+// `fast_rms_norm(ones) + multiply` computes. The only on-device difference is
+// the sum-of-squares reduction order + rsqrt vs the stock rms_norm kernel, the
+// accepted few-bf16-ulp class (same bar as the fused-read parity test).
+//
+// Opt-in: MLX_SERVE_HC_WRITE_NORM=1 (off by default; kill switch =0). Gated to
+// hc 1..8 / H%256==0 / bf16|f16 / batch*seq <= HC_WRITE_NORM_MAX_ROWS.
+const HC_WRITE_NORM_SOURCE =
+    \\uint tid = thread_index_in_threadgroup;
+    \\uint lane = thread_index_in_simdgroup;
+    \\uint sg = simdgroup_index_in_threadgroup;
+    \\uint h = threadgroup_position_in_grid.x;
+    \\uint row = threadgroup_position_in_grid.y;
+    \\threadgroup float tgs[8];
+    \\const int base = int(h) * H;
+    \\const int PER = H / 256;
+    \\const device T* x = x_in + (size_t)row * (size_t)(HC * H);
+    \\device T* xs = xs_out + (WR ? (size_t)row * (size_t)(HC * H) : 0);
+    \\device T* xn = xn_out + (size_t)row * (size_t)(HC * H);
+    \\float xv[PER];
+    \\if (WR) {
+    \\  // Pending hcWrite: stream' = T(stream + T(out * inj)), the chain's two roundings.
+    \\  float g = float(wi_in[(size_t)row * (size_t)HC + h]);
+    \\  const device T* wo = wo_in + (size_t)row * (size_t)H;
+    \\  for (int i = 0; i < PER; ++i) {
+    \\    int k = base + int(tid) + 256 * i;
+    \\    T v = T(float(x[k]) + float(T(float(wo[k - base]) * g)));
+    \\    xs[k] = v;
+    \\    xv[i] = float(v);
+    \\  }
+    \\} else {
+    \\  for (int i = 0; i < PER; ++i) xv[i] = float(x[base + int(tid) + 256 * i]);
+    \\}
+    \\float a = 0.0f;
+    \\for (int i = 0; i < PER; ++i) a += xv[i] * xv[i];
+    \\a = simd_sum(a);
+    \\if (lane == 0) tgs[sg] = a;
+    \\threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\float t = 0.0f;
+    \\for (int g = 0; g < 8; ++g) t += tgs[g];
+    \\float rsh = rsqrt(t / float(H) + eps[0]);
+    \\for (int i = 0; i < PER; ++i) {
+    \\  int k = base + int(tid) + 256 * i;
+    \\  xn[k] = T(float(T(xv[i] * rsh)) * float(nw[k]));
+    \\}
+;
+
+const HcWriteNormKey = struct { hc: c_int, h: c_int, rows: c_int, write: c_int, dtype: mlx.mlx_dtype };
+var hc_writenorm_kernel: ?mlx.mlx_fast_metal_kernel = null;
+var hc_writenorm_cfg: ?mlx.mlx_fast_metal_kernel_config = null;
+var hc_writenorm_key: HcWriteNormKey = std.mem.zeroes(HcWriteNormKey);
+var hc_writenorm_engaged = false;
+var hc_writenorm_env: ?bool = null;
+pub var hc_writenorm_override: ?bool = null;
+
+fn hcWriteNormEnabled() bool {
+    if (hc_writenorm_override) |v| return v;
+    if (hc_writenorm_env) |v| return v;
+    const raw = std.c.getenv("MLX_SERVE_HC_WRITE_NORM");
+    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
+    hc_writenorm_env = enabled;
+    return enabled;
+}
+
+/// Rows (batch*seq) the fused HC write+norm serves (MLX_SERVE_HC_WRITE_NORM=1).
+pub const HC_WRITE_NORM_MAX_ROWS: c_int = 8192;
+
+fn getHcWriteNormKernel() !mlx.mlx_fast_metal_kernel {
+    if (hc_writenorm_kernel) |k| return k;
+    const input_names = [_][*:0]const u8{ "x_in", "wo_in", "wi_in", "nw", "eps" };
+    const output_names = [_][*:0]const u8{ "xn_out", "xs_out" };
+    const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+    defer _ = mlx.mlx_vector_string_free(in_vec);
+    const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+    defer _ = mlx.mlx_vector_string_free(out_vec);
+    const kernel = mlx.mlx_fast_metal_kernel_new("mlxserve_hc_write_norm", in_vec, out_vec, HC_WRITE_NORM_SOURCE, "", true, false);
+    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+    hc_writenorm_kernel = kernel;
+    return kernel;
+}
+
+pub const HcWriteNorm = struct {
+    stream: mlx.mlx_array, // [B,S,hc*hidden]; null-ctx when no write was applied
+    n4: mlx.mlx_array, // [B,S,hc,H] group-norm output (rms · norm_w)
+};
+
+/// Fused prefill HC write + group-norm. `out`/`inj` null-ctx = pure norm
+/// (write folded when they are set: `stream += out*inj` then norm). `norm_w`
+/// is the [hc, hidden] group-norm weight (already carrying the reference's
+/// +1). Returns the persistent stream (written) and the norm output, or null
+/// when the geometry/dtype is outside the kernel (caller keeps the chain).
+pub fn hcWriteNormFused(
+    s: mlx.mlx_stream,
+    stream: mlx.mlx_array,
+    out: mlx.mlx_array,
+    inj: mlx.mlx_array,
+    norm_w: mlx.mlx_array,
+    eps: f32,
+    batch: c_int,
+    seq: c_int,
+    hc: c_int,
+    hidden: c_int,
+) !?HcWriteNorm {
+    if (!hcWriteNormEnabled()) return null;
+    if (!mlx.streamIsGpu(s)) return null;
+    const rows = batch * seq;
+    if (rows < 1 or rows > HC_WRITE_NORM_MAX_ROWS) return null;
+    if (hc < 1 or hc > 8 or hidden < 256 or @rem(hidden, 256) != 0) return null;
+    const xd = mlx.mlx_array_dtype(stream);
+    if (xd != .bfloat16 and xd != .float16) return null;
+    if (mlx.mlx_array_dtype(norm_w) != xd) return null;
+    const K: c_int = hc * hidden;
+    if (mlx.mlx_array_size(stream) != @as(usize, @intCast(rows * K))) return null;
+    if (mlx.mlx_array_size(norm_w) != @as(usize, @intCast(K))) return null;
+    const write: c_int = @intFromBool(out.ctx != null);
+    if (write == 1) {
+        if (inj.ctx == null) return null;
+        if (mlx.mlx_array_dtype(out) != xd or mlx.mlx_array_dtype(inj) != xd) return null;
+        if (mlx.mlx_array_size(out) != @as(usize, @intCast(rows * hidden))) return null;
+        if (mlx.mlx_array_size(inj) != @as(usize, @intCast(rows * hc))) return null;
+    }
+
+    const key = HcWriteNormKey{ .hc = hc, .h = hidden, .rows = rows, .write = write, .dtype = xd };
+    if (hc_writenorm_cfg == null or !std.meta.eql(hc_writenorm_key, key)) {
+        if (hc_writenorm_cfg) |c| _ = mlx.mlx_fast_metal_kernel_config_free(c);
+        const config = mlx.mlx_fast_metal_kernel_config_new();
+        const n4_shape = [_]c_int{ batch, seq, hc, hidden };
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &n4_shape, 4, xd));
+        const xs_shape = [_]c_int{if (write == 1) batch * seq * hc * hidden else 1};
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &xs_shape, 1, xd));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(config, 256 * hc, rows, 1));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(config, 256, 1, 1));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(config, "T", xd));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "HC", hc));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "H", hidden));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "WR", write));
+        hc_writenorm_cfg = config;
+        hc_writenorm_key = key;
+    }
+
+    const esh = [_]c_int{1};
+    var ev = eps;
+    const eps_arr = mlx.mlx_array_new_data(&ev, &esh, 1, .float32);
+    defer _ = mlx.mlx_array_free(eps_arr);
+
+    // wo_in/wi_in are only dereferenced under `if (WR)`; norm_w stands in as a
+    // same-dtype dummy so the input list stays fixed in the pure-norm arm.
+    const dummy = norm_w;
+    const wo = if (write == 1) out else dummy;
+    const wi = if (write == 1) inj else dummy;
+    const inputs_arr = [_]mlx.mlx_array{ stream, wo, wi, norm_w, eps_arr };
+    const inputs_vec = mlx.mlx_vector_array_new_data(&inputs_arr, inputs_arr.len);
+    defer _ = mlx.mlx_vector_array_free(inputs_vec);
+
+    const kernel = try getHcWriteNormKernel();
+    var outputs_vec = mlx.mlx_vector_array_new();
+    defer _ = mlx.mlx_vector_array_free(outputs_vec);
+    try mlx.check(mlx.mlx_fast_metal_kernel_apply(&outputs_vec, kernel, inputs_vec, hc_writenorm_cfg.?, s));
+    if (mlx.mlx_vector_array_size(outputs_vec) != 2) return error.MetalKernelBadOutputCount;
+    var n4 = mlx.mlx_array_new();
+    errdefer _ = mlx.mlx_array_free(n4);
+    try mlx.check(mlx.mlx_vector_array_get(&n4, outputs_vec, 0));
+    var stream_out = mlx.mlx_array_new();
+    errdefer _ = mlx.mlx_array_free(stream_out);
+    try mlx.check(mlx.mlx_vector_array_get(&stream_out, outputs_vec, 1));
+    if (write == 0) {
+        _ = mlx.mlx_array_free(stream_out);
+        stream_out = .{ .ctx = null };
+    }
+    if (!hc_writenorm_engaged) {
+        hc_writenorm_engaged = true;
+        log.info("[hc] fused prefill write+norm engaged: M={d} hc={d} H={d} wr={d} (MLX_SERVE_HC_WRITE_NORM=0 restores the chain)\n", .{ rows, hc, hidden, write });
+    }
+    return .{ .stream = stream_out, .n4 = n4 };
+}
+
 // ── Prefill MoE down-projection + score-weight + top-K reduce ──
 //
 // The sorted prefill path computes the weighted expert sum as FOUR passes over
@@ -37210,6 +37424,126 @@ test "fused HC prefill up+mix kernel matches the composed up/sigmoid/mean chain"
     const n4bad = try bf16Random(allocator, rnd, s, &.{ 1, 33, HC, 63 }, 2.0, 0.0);
     defer _ = mlx.mlx_array_free(n4bad);
     try testing.expect((try hcUpMixFused(s, bad, n4bad, up.w, up.sc, up.bi, 1, 33, HC, 63, bits, gs)) == null);
+}
+
+test "fused HC prefill write+norm matches the composed write+group-norm chain" {
+    // Reference (WR=1) = `stream + out[...,None,:]*inj` (reshape, broadcast
+    // multiply, add, reshape) then `fast_rms_norm(·, ones, eps) * norm_w`. The
+    // kernel applies the write with the chain's exact two roundings (T(out·inj),
+    // then T(stream + that) — so the written stream is BIT-identical) and folds
+    // the group-norm into the same dispatch (the sum-of-squares reduction order
+    // + rsqrt vs the stock rms_norm kernel is the accepted few-bf16-ulp class,
+    // same bar as the fused-read parity test). Pure-norm (WR=0) checked too.
+    const s = mlx.gpuStream();
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x4C0FFEE + 2);
+    const rnd = prng.random();
+    hc_writenorm_override = true;
+    defer hc_writenorm_override = null;
+
+    const HC: c_int = 4;
+    const H: c_int = 1024;
+    const K: c_int = HC * H;
+    const rows: c_int = 3;
+    const eps: f32 = 1e-6;
+
+    const bf16Random = struct {
+        fn f(a: std.mem.Allocator, r: std.Random, st: mlx.mlx_stream, shape: []const c_int, scale: f32, offset: f32) !mlx.mlx_array {
+            var n: usize = 1;
+            for (shape) |d| n *= @intCast(d);
+            const buf = try a.alloc(f32, n);
+            defer a.free(buf);
+            for (buf) |*v| v.* = (r.float(f32) - 0.5) * scale + offset;
+            const a32 = mlx.mlx_array_new_data(buf.ptr, shape.ptr, @intCast(shape.len), .float32);
+            defer _ = mlx.mlx_array_free(a32);
+            var out = mlx.mlx_array_new();
+            try mlx.check(mlx.mlx_astype(&out, a32, .bfloat16, st));
+            return out;
+        }
+    }.f;
+
+    const checkClose = struct {
+        fn f(a: std.mem.Allocator, st: mlx.mlx_stream, ref: mlx.mlx_array, val: mlx.mlx_array, n: usize) !void {
+            const rh = try a.alloc(f32, n);
+            defer a.free(rh);
+            const gh = try a.alloc(f32, n);
+            defer a.free(gh);
+            try testReadF32(ref, rh, st);
+            try testReadF32(val, gh, st);
+            var worst: f32 = 0;
+            for (rh, gh) |r, g| {
+                const tol = 0.02 * @abs(r) + 0.008;
+                const diff = @abs(r - g);
+                if (diff > tol and diff / tol > worst) worst = diff / tol;
+            }
+            std.debug.print("fused hc write+norm: n={d} worst diff/tol={d:.3}\n", .{ n, worst });
+            if (worst > 0) return error.HcWriteNormParity;
+        }
+    }.f;
+
+    const stream = try bf16Random(allocator, rnd, s, &.{ 1, rows, K }, 4.0, 0.0);
+    defer _ = mlx.mlx_array_free(stream);
+    const out = try bf16Random(allocator, rnd, s, &.{ 1, rows, H }, 2.0, 0.0);
+    defer _ = mlx.mlx_array_free(out);
+    const inj = try bf16Random(allocator, rnd, s, &.{ 1, rows, HC, 1 }, 1.0, 1.0);
+    defer _ = mlx.mlx_array_free(inj);
+    const norm_w = try bf16Random(allocator, rnd, s, &.{ HC, H }, 1.0, 1.0);
+    defer _ = mlx.mlx_array_free(norm_w);
+    const ones = try bf16Random(allocator, rnd, s, &.{H}, 0.0, 1.0);
+    defer _ = mlx.mlx_array_free(ones);
+
+    // ── WR=1: write + norm ──
+    const shape4 = [_]c_int{ 1, rows, HC, H };
+    var stream4 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(stream4);
+    try mlx.check(mlx.mlx_reshape(&stream4, stream, &shape4, 4, s));
+    const o4 = [_]c_int{ 1, rows, 1, H };
+    var out4 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(out4);
+    try mlx.check(mlx.mlx_reshape(&out4, out, &o4, 4, s));
+    var prod4 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(prod4);
+    try mlx.check(mlx.mlx_multiply(&prod4, out4, inj, s));
+    var sum4 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(sum4);
+    try mlx.check(mlx.mlx_add(&sum4, stream4, prod4, s));
+    const flat_shape = [_]c_int{ 1, rows, K };
+    var ref_stream = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(ref_stream);
+    try mlx.check(mlx.mlx_reshape(&ref_stream, sum4, &flat_shape, 3, s));
+    var n4raw = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(n4raw);
+    try mlx.check(mlx.mlx_fast_rms_norm(&n4raw, sum4, ones, eps, s));
+    var ref_n4 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(ref_n4);
+    try mlx.check(mlx.mlx_multiply(&ref_n4, n4raw, norm_w, s));
+
+    const wn = (try hcWriteNormFused(s, stream, out, inj, norm_w, eps, 1, rows, HC, H)) orelse return error.HcWriteNormDeclined;
+    defer _ = mlx.mlx_array_free(wn.stream);
+    defer _ = mlx.mlx_array_free(wn.n4);
+    try testing.expect(wn.stream.ctx != null);
+    try std.testing.expectEqual(@as(f32, 0.0), try attn256MaxDiff(wn.stream, ref_stream, s));
+    try checkClose(allocator, s, ref_n4, wn.n4, @intCast(rows * K));
+
+    // ── WR=0: pure norm over the ORIGINAL stream ──
+    var n4raw0 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(n4raw0);
+    try mlx.check(mlx.mlx_fast_rms_norm(&n4raw0, stream4, ones, eps, s));
+    var ref_n4_0 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(ref_n4_0);
+    try mlx.check(mlx.mlx_multiply(&ref_n4_0, n4raw0, norm_w, s));
+
+    const wn0 = (try hcWriteNormFused(s, stream, .{ .ctx = null }, .{ .ctx = null }, norm_w, eps, 1, rows, HC, H)) orelse return error.HcWriteNormDeclined;
+    defer _ = mlx.mlx_array_free(wn0.n4);
+    try testing.expect(wn0.stream.ctx == null);
+    try checkClose(allocator, s, ref_n4_0, wn0.n4, @intCast(rows * K));
+
+    // Decline: opt-in off.
+    hc_writenorm_override = false;
+    try testing.expect((try hcWriteNormFused(s, stream, out, inj, norm_w, eps, 1, rows, HC, H)) == null);
+    hc_writenorm_override = true;
+    // Decline: H not a multiple of 256.
+    try testing.expect((try hcWriteNormFused(s, stream, out, inj, norm_w, eps, 1, rows, HC, 100)) == null);
 }
 
 test "fused MoE down+score+reduce matches the composed take/multiply/sum chain" {
