@@ -24553,33 +24553,49 @@ pub const Transformer = struct {
 
             // gate / up gather_qmm: x_rep [N,1,D], rhs_indices=sorted_inds [N],
             // output [N,1,intermediate]. squeeze inner 1 → [N, intermediate].
-            var gate_out_3d = mlx.mlx_array_new();
-            defer _ = mlx.mlx_array_free(gate_out_3d);
-            try gatherExpertMm(&gate_out_3d, x_rep, mw.switch_gate_w, mw.switch_gate_s, mw.switch_gate_b, no_idx, sorted_inds, gate_qp.bits, gate_qp.group_size, gate_qp.mode, true, self.s);
-            var gate_out = mlx.mlx_array_new();
-            defer _ = mlx.mlx_array_free(gate_out);
-            try mlx.check(mlx.mlx_squeeze(&gate_out, gate_out_3d, self.s));
-            try self.addExpertBias(&gate_out, mw.switch_gate_bias, sorted_inds);
+            // Opt-in fused gate+up+GeGLU (MLX_SERVE_MOE_GATEUP_FUSED=1) replaces
+            // both gather_qmm calls AND the GeGLU below with one schedule +
+            // tiled-GEMM pair; falls back to the composed chain when the
+            // geometry/quant/bias/dtype is outside the kernel (plain-SIMD,
+            // 4-bit/gs64, silu, no expert bias).
+            const num_experts_i: c_int = @intCast(cfg.num_experts);
+            const moe_int: c_int = @intCast(mlx.getShape(mw.switch_up_w)[1]);
+            var expert_act: ?mlx.mlx_array = null;
+            defer if (expert_act) |a| {
+                _ = mlx.mlx_array_free(a);
+            };
+            const fused_gateup = try moeGateUpFused(self.s, x_gathered, sorted_inds, mw.switch_gate_w, mw.switch_gate_s, mw.switch_gate_b, mw.switch_up_w, mw.switch_up_s, mw.switch_up_b, gate_qp.bits, gate_qp.group_size, total_inds, num_experts_i, D, moe_int);
+            if (fused_gateup) |act| {
+                expert_act = act;
+            } else {
+                var gate_out_3d = mlx.mlx_array_new();
+                defer _ = mlx.mlx_array_free(gate_out_3d);
+                try gatherExpertMm(&gate_out_3d, x_rep, mw.switch_gate_w, mw.switch_gate_s, mw.switch_gate_b, no_idx, sorted_inds, gate_qp.bits, gate_qp.group_size, gate_qp.mode, true, self.s);
+                var gate_out = mlx.mlx_array_new();
+                defer _ = mlx.mlx_array_free(gate_out);
+                try mlx.check(mlx.mlx_squeeze(&gate_out, gate_out_3d, self.s));
+                try self.addExpertBias(&gate_out, mw.switch_gate_bias, sorted_inds);
 
-            var up_out_3d = mlx.mlx_array_new();
-            defer _ = mlx.mlx_array_free(up_out_3d);
-            try gatherExpertMm(&up_out_3d, x_rep, mw.switch_up_w, mw.switch_up_s, mw.switch_up_b, no_idx, sorted_inds, up_qp.bits, up_qp.group_size, up_qp.mode, true, self.s);
-            var up_out = mlx.mlx_array_new();
-            defer _ = mlx.mlx_array_free(up_out);
-            try mlx.check(mlx.mlx_squeeze(&up_out, up_out_3d, self.s));
-            try self.addExpertBias(&up_out, mw.switch_up_bias, sorted_inds);
+                var up_out_3d = mlx.mlx_array_new();
+                defer _ = mlx.mlx_array_free(up_out_3d);
+                try gatherExpertMm(&up_out_3d, x_rep, mw.switch_up_w, mw.switch_up_s, mw.switch_up_b, no_idx, sorted_inds, up_qp.bits, up_qp.group_size, up_qp.mode, true, self.s);
+                var up_out = mlx.mlx_array_new();
+                defer _ = mlx.mlx_array_free(up_out);
+                try mlx.check(mlx.mlx_squeeze(&up_out, up_out_3d, self.s));
+                try self.addExpertBias(&up_out, mw.switch_up_bias, sorted_inds);
 
-            // gpt_oss swaps the activation itself, not just its inputs.
-            const expert_act = if (cfg.swiglu_limit > 0.0)
-                try self.computeGptOssSwiGLU(gate_out, up_out)
-            else
-                try self.computeGeglu(gate_out, up_out);
-            defer _ = mlx.mlx_array_free(expert_act);
+                // gpt_oss swaps the activation itself, not just its inputs.
+                expert_act = if (cfg.swiglu_limit > 0.0)
+                    try self.computeGptOssSwiGLU(gate_out, up_out)
+                else
+                    try self.computeGeglu(gate_out, up_out);
+            }
+            const act_unwrapped = expert_act.?;
 
             // down: expand inner singleton → [N,1,intermediate] → gather_qmm → [N,1,hidden]
             var act_exp = mlx.mlx_array_new();
             defer _ = mlx.mlx_array_free(act_exp);
-            try mlx.check(mlx.mlx_expand_dims(&act_exp, expert_act, -2, self.s));
+            try mlx.check(mlx.mlx_expand_dims(&act_exp, act_unwrapped, -2, self.s));
             var down_3d = mlx.mlx_array_new();
             defer _ = mlx.mlx_array_free(down_3d);
             try gatherExpertMm(&down_3d, act_exp, mw.switch_down_w, mw.switch_down_s, mw.switch_down_b, no_idx, sorted_inds, down_qp.bits, down_qp.group_size, down_qp.mode, true, self.s);
@@ -31560,6 +31576,321 @@ pub fn moeDownReduceFused(
     return out;
 }
 
+// ── Prefill MoE fused gate/up + GeGLU (sorted path, plain-SIMD) ──
+//
+// The sorted prefill path runs two gather_qmm calls (gate, up) into [Ntot, N]
+// bf16 temporaries, then a separate silu·up activation. This pair of kernels
+// replaces all three: a 512-thread schedule pass (thread e = expert e binary-
+// searches the sorted ids for its run and emits per-BM-block tiles
+// {start, count, block}), then a tiled GEMM whose threadgroups process one
+// (tile, column-block) each — every slot in a tile shares ONE expert, so the
+// expert's gate/up weight is streamed once per K-block, and the epilogue is
+// the same LUT GeGLU as fusedSwiGLU (bit-exact silu). No expert-bias path is
+// taken (that stays composed). Rounding: fp32 dots -> bf16 gate/up -> LUT
+// silu -> bf16 product -> bf16 act, identical to gather_qmm + fusedSwiGLU
+// modulo fp32 dot order (research/moe_gateup_reference.py).
+//
+// Opt-in until validated on Apple Silicon: MLX_SERVE_MOE_GATEUP_FUSED=1.
+// Gated to 4-bit affine / group 64 / K%64==0 / N%64==0 / E<=512 / no expert
+// bias / silu (non-gpt-oss). BM=64 tiles.
+const MOE_GATEUP_SCHEDULE_SOURCE =
+    \\// One 512-thread group builds a compact tile schedule from sorted expert
+    \\// ids (faithful port of research handoff work/grouped_qmm_tiles.metal).
+    \\// Experts t >= E fall out with count == 0 — NO early return: the
+    \\// simd_prefix_inclusive_sum below is a warp-collective, so every lane of
+    \\// every simdgroup must reach it.
+    \\constexpr int BM = 64;
+    \\const uint t = thread_index_in_threadgroup;   // 0..511 = expert id
+    \\const int M = int(M_size);
+    \\const int NE = int(E_size);
+    \\const int capacity = M / BM + NE;
+    \\const device uint32_t* indices = inds;
+    \\device int32_t* tiles = out;
+    \\for (int j = (int)t; j < capacity * 3; j += 512) tiles[j] = 0;
+    \\threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\int lo = 0, hi = M;
+    \\while (lo < hi) { int mid = (lo + hi) / 2; if (indices[mid] < t) lo = mid + 1; else hi = mid; }
+    \\const int start = lo;
+    \\hi = M;
+    \\while (lo < hi) { int mid = (lo + hi) / 2; if (indices[mid] <= t) lo = mid + 1; else hi = mid; }
+    \\const int count = lo - start;
+    \\const int n = (count + BM - 1) / BM;
+    \\const int within = simd_prefix_inclusive_sum(n);
+    \\threadgroup int group_counts[16];
+    \\if (thread_index_in_simdgroup == 31) group_counts[simdgroup_index_in_threadgroup] = within;
+    \\threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\int offset = within - n;
+    \\for (int g = 0; g < (int)simdgroup_index_in_threadgroup; g++) offset += group_counts[g];
+    \\for (int block = 0; block < n; block++) {
+    \\    int at = (offset + block) * 3;
+    \\    tiles[at] = start; tiles[at + 1] = count; tiles[at + 2] = block;
+    \\}
+;
+
+const MOE_GATEUP_SOURCE =
+    \\// Tiled GEMM + GeGLU epilogue, plain SIMD. One threadgroup per (tile,
+    \\// column-block): every slot in a tile shares ONE expert, so the packed
+    \\// gate/up weights for that expert are streamed once per K-block. Dequant
+    \\// stays in fp32 exactly like MLX's quantized matmul / gatherQmv
+    \\// (q*scale+bias computed in fp32, no intermediate bf16 rounding of the
+    \\// weight — rounding the weight to bf16 would NOT match gather_qmm), and
+    \\// the fp32 dot is rounded to bf16 gate/up once at the end.
+    \\constexpr int BM = 64;
+    \\constexpr int BN = 64;
+    \\constexpr int BK = 64;
+    \\constexpr int WM = 4;
+    \\constexpr int WN = 2;
+    \\constexpr int SM = BM / WM;   // 16
+    \\constexpr int SN = BN / WN;   // 32
+    \\constexpr int VPW = 32 / BITS;
+    \\
+    \\const int tg_col = threadgroup_position_in_grid.x;
+    \\const int tile = threadgroup_position_in_grid.y;
+    \\const int start = tiles[tile * 3];
+    \\const int count = tiles[tile * 3 + 1];
+    \\const int block = tiles[tile * 3 + 2];
+    \\if (count <= 0) return;
+    \\const int row0 = start + block * BM;
+    \\const int M = min(BM, count - block * BM);
+    \\if (M <= 0) return;
+    \\const uint expert = inds[start];
+    \\const int col0 = tg_col * BN;
+    \\
+    \\const int sg = simdgroup_index_in_threadgroup;
+    \\const int lane = thread_index_in_simdgroup;
+    \\const int tid = thread_index_in_threadgroup;   // 0..255
+    \\const int tm = (sg / WN) * SM;
+    \\const int tn = (sg % WN) * SN;
+    \\
+    \\const int K = int(K_size);
+    \\const int N = int(N_size);
+    \\const int K_by_p = K / VPW;
+    \\const int K_by_gs = K / GS;
+    \\
+    \\threadgroup T Atile[BM * BK];
+    \\
+    \\float accg[SM];
+    \\float accu[SM];
+    \\for (int i = 0; i < SM; i++) { accg[i] = 0.0f; accu[i] = 0.0f; }
+    \\
+    \\const size_t wbase = (size_t)expert * (size_t)N * (size_t)K_by_p;
+    \\const size_t sbase = (size_t)expert * (size_t)N * (size_t)K_by_gs;
+    \\const int col = col0 + tn + lane;
+    \\const bool col_ok = col < N;
+    \\
+    \\for (int k0 = 0; k0 < K; k0 += BK) {
+    \\    for (int p = tid; p < BM * BK; p += 256) {
+    \\        int r = p / BK, kk = p % BK;
+    \\        int k = k0 + kk;
+    \\        Atile[p] = (r < M && k < K) ? x[(size_t)(row0 + r) * K + k] : T(0.0f);
+    \\    }
+    \\    threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\    // GS == BK == 64, so one scale/bias pair covers this whole K-block.
+    \\    const int gi = k0 / GS;
+    \\    for (int i = 0; i < SM; i++) {
+    \\        int row = row0 + tm + i;
+    \\        if (!col_ok || row >= row0 + M) continue;
+    \\        float s_g = float(scales[sbase + (size_t)col * K_by_gs + gi]);
+    \\        float b_g = float(biases[sbase + (size_t)col * K_by_gs + gi]);
+    \\        float s_u = float(up_scales[sbase + (size_t)col * K_by_gs + gi]);
+    \\        float b_u = float(up_biases[sbase + (size_t)col * K_by_gs + gi]);
+    \\        float sg = 0.0f, su = 0.0f;
+    \\        for (int kk = 0; kk < BK; kk += VPW) {
+    \\            int k = k0 + kk;
+    \\            uint32_t pwg = w_q[wbase + (size_t)col * K_by_p + (k / VPW)];
+    \\            uint32_t pwu = up_w_q[wbase + (size_t)col * K_by_p + (k / VPW)];
+    \\            for (int j = 0; j < VPW; j++) {
+    \\                T a = Atile[(tm + i) * BK + kk + j];
+    \\                float qg = float((pwg >> (j * BITS)) & ((1u << BITS) - 1u));
+    \\                float qu = float((pwu >> (j * BITS)) & ((1u << BITS) - 1u));
+    \\                sg += float(a) * (qg * s_g + b_g);
+    \\                su += float(a) * (qu * s_u + b_u);
+    \\            }
+    \\        }
+    \\        accg[i] += sg;
+    \\        accu[i] += su;
+    \\    }
+    \\    threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\}
+    \\
+    \\if (col_ok) {
+    \\    for (int i = 0; i < SM; i++) {
+    \\        int row = row0 + tm + i;
+    \\        if (row < row0 + M) {
+    \\            T gv = T(accg[i]);
+    \\            T uv = T(accu[i]);
+    \\            T sv = sigtab[as_type<ushort>(gv)];
+    \\            T act = T(float(gv) * float(sv));
+    \\            out[(size_t)row * N + col] = T(float(act) * float(uv));
+    \\        }
+    \\    }
+    \\}
+;
+
+const MoeGateUpKey = struct { k: c_int, n: c_int, e: c_int, rows: c_int, dtype: mlx.mlx_dtype };
+var moe_gateup_sched_kernel: ?mlx.mlx_fast_metal_kernel = null;
+var moe_gateup_kernel: ?mlx.mlx_fast_metal_kernel = null;
+var moe_gateup_cfg: ?mlx.mlx_fast_metal_kernel_config = null;
+var moe_gateup_key: MoeGateUpKey = std.mem.zeroes(MoeGateUpKey);
+var moe_gateup_engaged = false;
+var moe_gateup_env: ?bool = null;
+pub var moe_gateup_override: ?bool = null;
+
+fn moeGateUpEnabled() bool {
+    if (moe_gateup_override) |v| return v;
+    if (moe_gateup_env) |v| return v;
+    const raw = std.c.getenv("MLX_SERVE_MOE_GATEUP_FUSED");
+    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
+    moe_gateup_env = enabled;
+    return enabled;
+}
+
+fn getMoeGateUpScheduleKernel() !mlx.mlx_fast_metal_kernel {
+    if (moe_gateup_sched_kernel) |k| return k;
+    const input_names = [_][*:0]const u8{ "inds", "M_size", "E_size" };
+    const output_names = [_][*:0]const u8{"out"};
+    const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+    defer _ = mlx.mlx_vector_string_free(in_vec);
+    const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+    defer _ = mlx.mlx_vector_string_free(out_vec);
+    const kernel = mlx.mlx_fast_metal_kernel_new("mlxserve_moe_gateup_sched", in_vec, out_vec, MOE_GATEUP_SCHEDULE_SOURCE, "", true, false);
+    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+    moe_gateup_sched_kernel = kernel;
+    return kernel;
+}
+
+fn getMoeGateUpKernel() !mlx.mlx_fast_metal_kernel {
+    if (moe_gateup_kernel) |k| return k;
+    const input_names = [_][*:0]const u8{ "x", "inds", "tiles", "w_q", "scales", "biases", "up_w_q", "up_scales", "up_biases", "sigtab", "K_size", "N_size" };
+    const output_names = [_][*:0]const u8{"out"};
+    const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+    defer _ = mlx.mlx_vector_string_free(in_vec);
+    const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+    defer _ = mlx.mlx_vector_string_free(out_vec);
+    const kernel = mlx.mlx_fast_metal_kernel_new("mlxserve_moe_gateup", in_vec, out_vec, MOE_GATEUP_SOURCE, "", true, false);
+    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+    moe_gateup_kernel = kernel;
+    return kernel;
+}
+
+/// Fused gate/up/GeGLU on the sorted prefill path: replaces the two
+/// gather_qmm calls + fusedSwiGLU. Returns act [Ntot, N] in SORTED order
+/// (the exact expert_act the composed chain produces), or null when the
+/// geometry/quant is outside the kernel (caller keeps the composed chain).
+pub fn moeGateUpFused(
+    s: mlx.mlx_stream,
+    x: mlx.mlx_array,
+    inds: mlx.mlx_array,
+    gw: mlx.mlx_array,
+    gsc: mlx.mlx_array,
+    gbi: mlx.mlx_array,
+    uw: mlx.mlx_array,
+    usc: mlx.mlx_array,
+    ubi: mlx.mlx_array,
+    bits: u32,
+    group_size: u32,
+    Ntot: c_int,
+    E: c_int,
+    K: c_int,
+    N: c_int,
+) !?mlx.mlx_array {
+    if (!moeGateUpEnabled()) return null;
+    if (!mlx.streamIsGpu(s)) return null;
+    if (bits != 4 or group_size != 64) return null;
+    if (Ntot < 1 or E < 1 or E > 512) return null;
+    if (K < 64 or N < 64 or @rem(K, 64) != 0 or @rem(N, 64) != 0) return null;
+    const xd = mlx.mlx_array_dtype(x);
+    if (xd != .bfloat16 and xd != .float16) return null;
+    const inv_dt = mlx.mlx_array_dtype(inds);
+    if (inv_dt != .int32 and inv_dt != .uint32) return null;
+    const vpw: c_int = @intCast(32 / bits);
+    const K_by_p: c_int = @divExact(K, vpw);
+    const K_by_gs: c_int = @divExact(K, @as(c_int, @intCast(group_size)));
+    const xsh = mlx.getShape(x);
+    const gsh = mlx.getShape(gw);
+    const ush = mlx.getShape(uw);
+    if (xsh.len != 2 or xsh[1] != K) return null;
+    if (gsh.len != 3 or ush.len != 3 or gsh[0] != E or gsh[1] != N or gsh[2] != K_by_p) return null;
+    if (ush[0] != E or ush[1] != N or ush[2] != K_by_p) return null;
+    if (mlx.mlx_array_size(x) != @as(usize, @intCast(@as(i64, Ntot) * K))) return null;
+    if (mlx.mlx_array_size(inds) != @as(usize, @intCast(Ntot))) return null;
+    if (gsc.ctx == null or gbi.ctx == null or usc.ctx == null or ubi.ctx == null) return null;
+    const ssh = mlx.getShape(gsc);
+    if (ssh.len != 3 or ssh[0] != E or ssh[1] != N or ssh[2] != K_by_gs) return null;
+
+    // Kernel reads uint32; routing indices arrive as int32/uint32.
+    var inds_u32 = inds;
+    var casted = mlx.mlx_array{ .ctx = null };
+    defer _ = mlx.mlx_array_free(casted);
+    if (inv_dt != .uint32) {
+        try mlx.check(mlx.mlx_astype(&casted, inds, .uint32, s));
+        inds_u32 = casted;
+    }
+
+    const BM: c_int = 64;
+    const capacity = @divTrunc(Ntot, BM) + E;
+    const M_arr = mlx.mlx_array_new_int(Ntot);
+    defer _ = mlx.mlx_array_free(M_arr);
+    const E_arr = mlx.mlx_array_new_int(E);
+    defer _ = mlx.mlx_array_free(E_arr);
+    const K_arr = mlx.mlx_array_new_int(K);
+    defer _ = mlx.mlx_array_free(K_arr);
+    const N_arr = mlx.mlx_array_new_int(N);
+    defer _ = mlx.mlx_array_free(N_arr);
+
+    // Phase A: schedule. One 512-thread group; thread t = expert t.
+    const tiles_shape = [_]c_int{ capacity, 3 };
+    const sched_cfg = mlx.mlx_fast_metal_kernel_config_new();
+    defer _ = mlx.mlx_fast_metal_kernel_config_free(sched_cfg);
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(sched_cfg, &tiles_shape, 2, .int32));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(sched_cfg, 512, 1, 1));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(sched_cfg, 512, 1, 1));
+    const sched_inputs_arr = [_]mlx.mlx_array{ inds_u32, M_arr, E_arr };
+    const sched_inputs = mlx.mlx_vector_array_new_data(&sched_inputs_arr, sched_inputs_arr.len);
+    defer _ = mlx.mlx_vector_array_free(sched_inputs);
+    var sched_outs = mlx.mlx_vector_array_new();
+    defer _ = mlx.mlx_vector_array_free(sched_outs);
+    try mlx.check(mlx.mlx_fast_metal_kernel_apply(&sched_outs, try getMoeGateUpScheduleKernel(), sched_inputs, sched_cfg, s));
+    if (mlx.mlx_vector_array_size(sched_outs) != 1) return error.MetalKernelBadOutputCount;
+    var tiles = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(tiles);
+    try mlx.check(mlx.mlx_vector_array_get(&tiles, sched_outs, 0));
+
+    // Phase B: tiled GEMM + GeGLU epilogue.
+    const key = MoeGateUpKey{ .k = K, .n = N, .e = E, .rows = Ntot, .dtype = xd };
+    if (moe_gateup_cfg == null or !std.meta.eql(moe_gateup_key, key)) {
+        if (moe_gateup_cfg) |c| _ = mlx.mlx_fast_metal_kernel_config_free(c);
+        const cfg = mlx.mlx_fast_metal_kernel_config_new();
+        const out_shape = [_]c_int{ Ntot, N };
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(cfg, &out_shape, 2, xd));
+        // set_grid counts THREADS: (N/BN) x capacity threadgroups, tg {32,4,2}.
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(cfg, @divExact(N, 64) * 32, capacity * 4, 2));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(cfg, 32, 4, 2));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(cfg, "T", xd));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(cfg, "BITS", @intCast(bits)));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(cfg, "GS", @intCast(group_size)));
+        moe_gateup_cfg = cfg;
+        moe_gateup_key = key;
+    }
+
+    const sigtab = try swigluSigTable(s, xd, std.heap.c_allocator);
+    const gemm_inputs_arr = [_]mlx.mlx_array{ x, inds_u32, tiles, gw, gsc, gbi, uw, usc, ubi, sigtab, K_arr, N_arr };
+    const gemm_inputs = mlx.mlx_vector_array_new_data(&gemm_inputs_arr, gemm_inputs_arr.len);
+    defer _ = mlx.mlx_vector_array_free(gemm_inputs);
+    var gemm_outs = mlx.mlx_vector_array_new();
+    defer _ = mlx.mlx_vector_array_free(gemm_outs);
+    try mlx.check(mlx.mlx_fast_metal_kernel_apply(&gemm_outs, try getMoeGateUpKernel(), gemm_inputs, moe_gateup_cfg.?, s));
+    if (mlx.mlx_vector_array_size(gemm_outs) != 1) return error.MetalKernelBadOutputCount;
+    var act = mlx.mlx_array_new();
+    errdefer _ = mlx.mlx_array_free(act);
+    try mlx.check(mlx.mlx_vector_array_get(&act, gemm_outs, 0));
+    if (!moe_gateup_engaged) {
+        moe_gateup_engaged = true;
+        log.info("[moe] fused gate+up+GeGLU kernel engaged: E={d} K={d} N={d} rows={d}\n", .{ E, K, N, Ntot });
+    }
+    return act;
+}
+
 const GateUpCfgKey = struct { topk: c_int, n: c_int, k: c_int, bits: u32, gs: u32, dtype: mlx.mlx_dtype };
 var gateup_cfg: ?mlx.mlx_fast_metal_kernel_config = null;
 var gateup_cfg_key: GateUpCfgKey = std.mem.zeroes(GateUpCfgKey);
@@ -36382,6 +36713,154 @@ test "fused MoE down+score+reduce matches the composed take/multiply/sum chain" 
     const inv_bad = try bf16Random(allocator, rnd, s, &.{32}, 1.0, 0.0);
     defer _ = mlx.mlx_array_free(inv_bad);
     try testing.expect((try moeDownReduceFused(s, down_bad, inv_bad, scores_bad, 4, 8, 63)) == null);
+}
+
+test "fused prefill gate+up+GeGLU matches gather_qmm + fusedSwiGLU (sorted path)" {
+    // Reference = the SORTED prefill chain the kernel replaces: gather_qmm for
+    // gate and up (each [Ntot,1,K] x [E,N,K*4/32] → [Ntot,1,N], squeeze) then
+    // fusedSwiGLU. The kernel streams the same packed uint32 weights, rounds
+    // the fp32 dot to bf16 gate/up, then applies the SAME LUT silu·up — so the
+    // two differ only by the fp32 dot's reduction order (≲ 2 bf16 ULP). See
+    // research/moe_gateup_reference.py for the numpy model.
+    const s = mlx.gpuStream();
+    const allocator = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x6A7E0FF5 + 7);
+    const rnd = prng.random();
+    moe_gateup_override = true;
+    defer moe_gateup_override = null;
+    swiglu_fused_override = true;
+    defer swiglu_fused_override = null;
+
+    const bf16Random = struct {
+        fn f(a: std.mem.Allocator, r: std.Random, st: mlx.mlx_stream, shape: []const c_int, scale: f32, offset: f32) !mlx.mlx_array {
+            var n: usize = 1;
+            for (shape) |d| n *= @intCast(d);
+            const buf = try a.alloc(f32, n);
+            defer a.free(buf);
+            for (buf) |*v| v.* = (r.float(f32) - 0.5) * scale + offset;
+            const a32 = mlx.mlx_array_new_data(buf.ptr, shape.ptr, @intCast(shape.len), .float32);
+            defer _ = mlx.mlx_array_free(a32);
+            var out = mlx.mlx_array_new();
+            try mlx.check(mlx.mlx_astype(&out, a32, .bfloat16, st));
+            return out;
+        }
+    }.f;
+
+    const checkClose = struct {
+        fn f(a: std.mem.Allocator, st: mlx.mlx_stream, ref: mlx.mlx_array, val: mlx.mlx_array, n: usize) !void {
+            const rh = try a.alloc(f32, n);
+            defer a.free(rh);
+            const gh = try a.alloc(f32, n);
+            defer a.free(gh);
+            try testReadF32(ref, rh, st);
+            try testReadF32(val, gh, st);
+            var worst: f32 = 0;
+            var maxabs: f32 = 0;
+            for (rh, gh) |r, g| {
+                const d = @abs(r - g);
+                if (d > maxabs) maxabs = d;
+                const tol = 0.02 * @abs(r) + 0.02;
+                if (d > tol and d / tol > worst) worst = d / tol;
+            }
+            std.debug.print("moe prefill gate+up: n={d} max|d|={d:.4} worst diff/tol={d:.3}\n", .{ n, maxabs, worst });
+            if (worst > 0) return error.MoeGateUpParity;
+        }
+    }.f;
+
+    const E: c_int = 8;
+    const K: c_int = 256;
+    const N: c_int = 64;
+    const Ntot: c_int = 160; // not a multiple of E, so expert runs are uneven
+
+    // Two independent affine banks (4-bit / group 64), so a kernel that read
+    // the gate bank twice could not pass.
+    const wcnt: usize = @intCast(E * N * K);
+    var banks: [2]struct { w: mlx.mlx_array, sc: mlx.mlx_array, bi: mlx.mlx_array } = undefined;
+    var made: usize = 0;
+    defer for (banks[0..made]) |b| {
+        _ = mlx.mlx_array_free(b.w);
+        _ = mlx.mlx_array_free(b.sc);
+        if (b.bi.ctx != null) _ = mlx.mlx_array_free(b.bi);
+    };
+    for (0..2) |bi_idx| {
+        const wbuf = try allocator.alloc(f32, wcnt);
+        defer allocator.free(wbuf);
+        for (wbuf) |*v| v.* = rnd.float(f32) - 0.5;
+        const wsh = [_]c_int{ E, N, K };
+        const w32 = mlx.mlx_array_new_data(wbuf.ptr, &wsh, 3, .float32);
+        defer _ = mlx.mlx_array_free(w32);
+        var wb = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(wb);
+        try mlx.check(mlx.mlx_astype(&wb, w32, .bfloat16, s));
+        var triple = mlx.mlx_vector_array_new();
+        defer _ = mlx.mlx_vector_array_free(triple);
+        try mlx.check(mlx.mlx_quantize(&triple, wb, mlx.mlx_optional_int.some(64), mlx.mlx_optional_int.some(4), "affine", .{}, s));
+        var wq = mlx.mlx_array_new();
+        try mlx.check(mlx.mlx_vector_array_get(&wq, triple, 0));
+        var sc = mlx.mlx_array_new();
+        try mlx.check(mlx.mlx_vector_array_get(&sc, triple, 1));
+        var bias = mlx.mlx_array_new();
+        try mlx.check(mlx.mlx_vector_array_get(&bias, triple, 2));
+        banks[bi_idx] = .{ .w = wq, .sc = sc, .bi = bias };
+        made += 1;
+    }
+
+    // Sorted expert ids: random assignment, argsort puts each expert's run in
+    // order — a true permutation of [0, Ntot), not an identity order.
+    const idbuf = try allocator.alloc(f32, @intCast(Ntot));
+    defer allocator.free(idbuf);
+    for (idbuf) |*v| v.* = @floatFromInt(rnd.uintLessThan(u32, @intCast(E)));
+    const idsh = [_]c_int{Ntot};
+    const ids32 = mlx.mlx_array_new_data(idbuf.ptr, &idsh, 1, .float32);
+    defer _ = mlx.mlx_array_free(ids32);
+    var order = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(order);
+    try mlx.check(mlx.mlx_argsort_axis(&order, ids32, 0, s));
+    var inds = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(inds);
+    try mlx.check(mlx.mlx_take_axis(&inds, ids32, order, 0, s));
+    var inds_u32 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(inds_u32);
+    try mlx.check(mlx.mlx_astype(&inds_u32, inds, .uint32, s));
+
+    // x_gathered [Ntot, K]: row i is consumed with expert inds[i] in BOTH paths.
+    const xg = try bf16Random(allocator, rnd, s, &.{ Ntot, K }, 2.0, 0.0);
+    defer _ = mlx.mlx_array_free(xg);
+
+    // Composed reference: gather_qmm (gate, up) + fusedSwiGLU.
+    const n1k = [_]c_int{ Ntot, 1, K };
+    var x_rep = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(x_rep);
+    try mlx.check(mlx.mlx_reshape(&x_rep, xg, &n1k, 3, s));
+    const no_idx = mlx.mlx_array{ .ctx = null };
+
+    var gate_3d = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(gate_3d);
+    try mlx.check(mlx.mlx_gather_qmm(&gate_3d, x_rep, banks[0].w, banks[0].sc, banks[0].bi, no_idx, inds_u32, true, mlx.mlx_optional_int.some(64), mlx.mlx_optional_int.some(4), "affine", true, s));
+    var gate = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(gate);
+    try mlx.check(mlx.mlx_squeeze(&gate, gate_3d, s));
+
+    var up_3d = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(up_3d);
+    try mlx.check(mlx.mlx_gather_qmm(&up_3d, x_rep, banks[1].w, banks[1].sc, banks[1].bi, no_idx, inds_u32, true, mlx.mlx_optional_int.some(64), mlx.mlx_optional_int.some(4), "affine", true, s));
+    var up = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(up);
+    try mlx.check(mlx.mlx_squeeze(&up, up_3d, s));
+
+    const ref = (try fusedSwiGLU(s, gate, up)) orelse return error.FusedSwigluDeclined;
+    defer _ = mlx.mlx_array_free(ref);
+
+    const got = (try moeGateUpFused(s, xg, inds_u32, banks[0].w, banks[0].sc, banks[0].bi, banks[1].w, banks[1].sc, banks[1].bi, 4, 64, Ntot, E, K, N)) orelse
+        return error.MoeGateUpDeclined;
+    defer _ = mlx.mlx_array_free(got);
+
+    try checkClose(allocator, s, ref, got, @intCast(Ntot * N));
+
+    // Off-geometry must decline (N=48 is not a multiple of 64).
+    const xg_bad = try bf16Random(allocator, rnd, s, &.{ Ntot, K }, 2.0, 0.0);
+    defer _ = mlx.mlx_array_free(xg_bad);
+    try testing.expect((try moeGateUpFused(s, xg_bad, inds_u32, banks[0].w, banks[0].sc, banks[0].bi, banks[1].w, banks[1].sc, banks[1].bi, 4, 64, Ntot, E, K, 48)) == null);
 }
 
 test "fused gate+up+SwiGLU expert kernel is bit-identical to the split gatherQmv path" {
