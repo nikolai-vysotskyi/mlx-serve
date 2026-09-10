@@ -20,8 +20,12 @@ this agent runs on cloud Linux (x86_64, 2 vCPU, no Zig, no Metal).
   against f64 ground truth over bf16-truncated inputs under the repo house rule
   (`err_new ≤ 1.5·err_stock + 0.02`, mirroring `gdnBlockedParityCase`).
   - WY identities proven exact in f64: `A_c` 6.9e-17, `B_c` 2.4e-17.
-  - f32 chunk forms match stock **bit-for-bit** and PASS at T=1024/2048,
-    C=128/256 (y_err 2.59–2.75e-2, state_err 3.84–3.89e-3, identical to stock).
+  - f32 chunk forms PASS the repo bar at T=1024/2048, C=128/256 (y_err
+    2.59–2.75e-2, state_err 3.84–3.89e-3, EQUAL to stock's error vs f64).
+    Note: they are NOT bit-identical to stock — the chunk-boundary compose
+    rounds differently by ~1–2 bf16 ULP (max|Δ| 3.9e-3 y / 9.8e-4 state),
+    which is inside the repo's "no worse than stock" bar and the existing
+    chunk-boundary continuity tolerance.
   - f64 block-vs-sequential: y ~2e-15, state ~6e-16.
 - **`research/gdn_chunked_design.md`** — 3-phase Metal kernel contract
   (per-chunk WY fold / boundary scan / output replay), threadgroup budget →

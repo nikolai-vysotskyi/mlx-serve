@@ -50,6 +50,12 @@ the f64 host ground truth, never kernel-vs-kernel; a new kernel passes iff
     err_new  <=  1.5 * err_stock  +  0.02
 on max-abs-diff of the bf16-truncated outputs (both upcast to f32).
 
+NOTE: the chunk forms are NOT bit-identical to the stock kernel — the
+chunk-boundary compose (`A_c M + B_c` vs T per-token updates) rounds
+differently by ~1-2 bf16 ULP (max|diff| ~3.9e-3 y / ~9.8e-4 state). They pass
+because their distance to f64 is EQUAL to the stock kernel's, which is exactly
+what the repo bar ("no worse than stock") measures.
+
 Run:  python3 research/gdn_chunked_reference.py
 """
 
