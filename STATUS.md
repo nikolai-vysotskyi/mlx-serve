@@ -111,13 +111,35 @@ prefix-cache 0, MTP off). Target M5 Max 128 GB; agent runs cloud Linux
   composed reference` (grp vs `attn256Reference` within the stock bar; grp vs
   stock < 1e-2) + `gatherQsa256 grouped: geometry gate`. (Not run on Metal.)
 
+### PLE gate + value-modulation fusion (Lever H, qwen4_exp spec-capture PLE)
+- `mlxserve_ple_gate` kernel (`PLE_GATE_SOURCE` inline in `src/transformer.zig`)
+  + `pleGateFused` + `pleGateFusedEnabled` + `getPleGateKernel` +
+  `PleGateKey` cache, wired into `pleForward` (called in the qwen4_exp
+  per-layer loop after `hcFlush`) behind an opt-in, with the composed
+  kq/gate/sigmoid/mul chain as fallback. Gated
+  `MLX_SERVE_PLE_GATE_FUSED=1` (default off); bf16|f16 only.
+- Folds `kq=key4*query4` → `sum` → `*inv_sqrt_h` → `sqrt(max(|·|,1e-6))·sign`
+  → LUT sigmoid → `*value` (≈10 dispatches) into ONE per-(row,hc) dispatch:
+  32-lane simdgroup reduces the H products in fp32 (MLX Reduce widens bf16
+  accumulators), the gate keeps every bf16 rounding point of the composed
+  chain (the `max` of two bf16 values is exactly bf16-representable, so the
+  skipped intermediates are no-ops — bit-exact by construction), and the
+  sigmoid is the shared `swigluSigTable` LUT (`sigtab[as_type<ushort>(g)]`).
+  `inv_sqrt_h` is a 0-dim scalar read as `constant T&` (MLX
+  write_signature: ndim==0 → reference, not pointer).
+- CPU evidence: `research/ple_gate_reference.py` PASS (gate range
+  [0.3672,0.6406], bf16-rounded chain drift 2.089e-3 vs pure-f32, bar 2 ulp).
+- Test: `test "fused PLE gate+value-modulation matches the composed
+  kq/gate/sigmoid/mul chain"` (maxAbsDiffF32 < 0.02; opt-in-off + shape
+  mismatch declines). (Not run on Metal.)
+
 ### Zig validation (runs here)
 - Whole-file `zig ast-check` clean apart from the pre-existing
-  `@backingInt`/`@fromBackingInt` invalid-builtin notes (24 hits, unchanged);
-  isolated semantic type-checks EXIT=0 for the new GDN prefill gate + the MoE
-  gateup wiring guard + the HC write+norm kernel/wiring/test + the grouped-QSA
-  gate/helpers/dispatch (`gatherQsa256` `use_group` arm, `QsaGroupCfgKey`,
-  `getAttnQsa256GroupKernel`) against the `/tmp/zchk` mlx stub.
+  `@backingInt`/`@fromBackingInt` invalid-builtin notes (12 hits with Zig
+  0.16.0, unchanged); isolated semantic type-checks EXIT=0 for the new GDN
+  prefill gate + the MoE gateup wiring guard + the HC write+norm
+  kernel/wiring/test + the grouped-QSA gate/helpers/dispatch + the PLE gate
+  kernel/wiring/test against the `/tmp/zchk` mlx stub (`chk_ple.zig`).
 
 ## Not done / blocked
 - **NOT built / run on Metal.** MSL compile + `zig build test` need Apple
@@ -139,7 +161,9 @@ Claimed so far: GDN chunkwise (25%) + GDN prework/norm-gate prefill fusion
 (part of the GDN 25% + its proj/epilogue) + HC up-mix (part of 15%) + HC
 write+group-norm (part of 15%) + MoE down+reduce (small) + MoE gate/up+GeGLU
 fusion (part of ~35%, plain-SIMD) + grouped-query QSA gather (part of ~23%,
-block reuse).
+block reuse) + PLE gate+value-modulation fusion (Lever H, small — the PLE
+block's ~456 ms is dominated by its key/value qmatmuls + dilated depthwise
+conv, not the ~10 elementwise gate dispatches it removes).
 Remaining: attention/QSA grouped-query block-reuse is now implemented (Lever
 G); still open is whether the gather is HBM-bound at all (measure per-block
 reads on M5 before betting on the ~G× staging win), a NAX perf pass for the
