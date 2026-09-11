@@ -42917,6 +42917,93 @@ test "GDN µbench: sequential kernel vs bare qmm at 27B shapes (attribution; MLX
     }
 }
 
+test "GDN WY µbench: stock vs blocked vs wy at Flash-Next geometry (MLX_SERVE_GDN_UBENCH=1)" {
+    // ATTRIBUTION probe for Task 3, not a pass/fail guard. Run with:
+    //   MLX_SERVE_GDN_UBENCH=1 zig build test -Doptimize=ReleaseFast -Dtest-filter="GDN WY µbench"
+    if (std.c.getenv("MLX_SERVE_GDN_UBENCH") == null) return error.SkipZigTest;
+    const io_util = @import("io_util.zig");
+    const tio = testing.io;
+    const al = testing.allocator;
+    const s = mlx.gpuStream();
+    const B: c_int = 1;
+    const Hk: c_int = 16;
+    const Hv: c_int = 48;
+    const Dk: c_int = 128;
+    const Dv: c_int = 128;
+    const WARM = 3;
+    const ITERS = 10;
+
+    for ([_]c_int{ 2048, 8192 }) |T| {
+        const in = try gdnWyInputs(al, 0xBE9C, B, T, Hk, Hv, Dk, Dv, .bfloat16, s);
+        defer in.deinit(al);
+        for ([_]mlx.mlx_array{ in.q, in.k, in.v, in.g, in.beta, in.st }) |a| try mlx.check(mlx.mlx_array_eval(a));
+
+        var stock_ms: f64 = 0;
+        var blocked_ms: f64 = 0;
+        var wy_ms: f64 = 0;
+        var intra_ms: f64 = 0;
+        var state_ms: f64 = 0;
+
+        for ([_]bool{ false, true }) |blocked| {
+            var it: usize = 0;
+            var sw = io_util.Stopwatch.init(tio);
+            while (it < WARM + ITERS) : (it += 1) {
+                if (it == WARM) sw.reset();
+                const o = try gdnRunYState(blocked, 32, in.q, in.k, in.v, in.g, in.beta, in.st, B, T, Hk, Hv, Dk, Dv, s);
+                try mlx.check(mlx.mlx_array_eval(o.y));
+                try mlx.check(mlx.mlx_array_eval(o.state));
+                _ = mlx.mlx_array_free(o.y);
+                _ = mlx.mlx_array_free(o.state);
+            }
+            const avg = @as(f64, @floatFromInt(sw.read())) / @as(f64, ITERS) / 1e6;
+            if (blocked) blocked_ms = avg else stock_ms = avg;
+        }
+
+        {
+            var it: usize = 0;
+            var sw = io_util.Stopwatch.init(tio);
+            while (it < WARM + ITERS) : (it += 1) {
+                if (it == WARM) sw.reset();
+                const o = try gdnRunWy(in.q, in.k, in.v, in.g, in.beta, in.st, B, T, Hk, Hv, Dk, Dv, s);
+                try mlx.check(mlx.mlx_array_eval(o.y));
+                try mlx.check(mlx.mlx_array_eval(o.state));
+                _ = mlx.mlx_array_free(o.y);
+                _ = mlx.mlx_array_free(o.state);
+            }
+            wy_ms = @as(f64, @floatFromInt(sw.read())) / @as(f64, ITERS) / 1e6;
+        }
+        {
+            var it: usize = 0;
+            var sw = io_util.Stopwatch.init(tio);
+            while (it < WARM + ITERS) : (it += 1) {
+                if (it == WARM) sw.reset();
+                const mid = try gdnWyIntra(s, in.q, in.k, in.v, in.g, in.beta, B, T, Hk, Hv, Dk, Dv);
+                for ([_]mlx.mlx_array{ mid.w, mid.u, mid.kd, mid.qeff, mid.yloc, mid.gc }) |a| try mlx.check(mlx.mlx_array_eval(a));
+                mid.deinit();
+            }
+            intra_ms = @as(f64, @floatFromInt(sw.read())) / @as(f64, ITERS) / 1e6;
+        }
+        {
+            const mid = try gdnWyIntra(s, in.q, in.k, in.v, in.g, in.beta, B, T, Hk, Hv, Dk, Dv);
+            defer mid.deinit();
+            for ([_]mlx.mlx_array{ mid.w, mid.u, mid.kd, mid.qeff, mid.yloc, mid.gc }) |a| try mlx.check(mlx.mlx_array_eval(a));
+            var it: usize = 0;
+            var sw = io_util.Stopwatch.init(tio);
+            while (it < WARM + ITERS) : (it += 1) {
+                if (it == WARM) sw.reset();
+                const o = try gdnWyState(s, mid, in.st, B, T, Hk, Hv, Dk, Dv);
+                try mlx.check(mlx.mlx_array_eval(o.y));
+                try mlx.check(mlx.mlx_array_eval(o.state));
+                _ = mlx.mlx_array_free(o.y);
+                _ = mlx.mlx_array_free(o.state);
+            }
+            state_ms = @as(f64, @floatFromInt(sw.read())) / @as(f64, ITERS) / 1e6;
+        }
+
+        std.debug.print("[gdn-wy-ubench] T={d} stock={d:.3} blocked={d:.3} wy={d:.3} (intra={d:.3} state={d:.3}) ms\n", .{ T, stock_ms, blocked_ms, wy_ms, intra_ms, state_ms });
+    }
+}
+
 test "prefillEvalCadence: small transients keep the coarse cadence" {
     const t = std.testing;
     fused256_override = false;
