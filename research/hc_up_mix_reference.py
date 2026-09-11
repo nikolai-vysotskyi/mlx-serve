@@ -64,8 +64,10 @@ def stable_sigmoid(x: np.ndarray) -> np.ndarray:
 # --------------------------------------------------------------------------
 
 def dequant(wq: np.ndarray, scales: np.ndarray, biases: np.ndarray,
-            bits: int, group_size: int) -> np.ndarray:
-    """wq: [N, K*bits/8] uint8 packed; scales/biases: [N, K/group] -> [N, K] fp32."""
+            bits: int, group_size: int, round_to_bf16: bool = True) -> np.ndarray:
+    """wq: [N, K*bits/8] uint8 packed; scales/biases: [N, K/group] -> [N, K] fp32.
+    round_to_bf16=True mirrors stock qmm_n dequantize() and the fused kernel
+    (T-rounded weight); False is the raw fp32 dequant used only for f64 truth."""
     N, Kbytes = wq.shape
     K = Kbytes * 8 // bits
     if K % group_size != 0:
@@ -84,7 +86,7 @@ def dequant(wq: np.ndarray, scales: np.ndarray, biases: np.ndarray,
         raise ValueError(bits)
     gidx = (np.arange(K, dtype=np.int64) // group_size)[None, :]  # [1, K]
     wf = nibs.astype(np.float32) * scales[:, gidx[0]].astype(np.float32) + biases[:, gidx[0]].astype(np.float32)
-    return wf
+    return bf16(wf) if round_to_bf16 else wf
 
 
 def qmm(a: np.ndarray, wq: np.ndarray, scales: np.ndarray, biases: np.ndarray,
@@ -145,7 +147,7 @@ def kernel_path(act, wq, scales, biases, normed, bits, group_size, sigtab):
 def f64_truth(act, wq, scales, biases, normed, bits, group_size):
     M, K = act.shape
     hc, H = normed.shape[1], normed.shape[2]
-    W = dequant(wq, scales, biases, bits, group_size).astype(np.float64)
+    W = dequant(wq, scales, biases, bits, group_size, False).astype(np.float64)
     up = act.astype(np.float64) @ W.T.astype(np.float64)
     up4 = up.reshape(M, hc, H)
     sig = 1.0 / (1.0 + np.exp(-up4))

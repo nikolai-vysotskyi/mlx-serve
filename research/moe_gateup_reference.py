@@ -7,13 +7,14 @@ N=640, affine 4-bit / group 64 (Metal: packed uint32 words [E, N, K*4/32];
 the numpy model unpacks the same bits from a uint8 byte view [E, N, K*4/8]).
 sorted prefill: x_gathered [Ntot, K], sorted_inds [Ntot] uint32 (non-decreasing).
 
-Composed chain (no expert bias): gate/up = gather_qmm per expert, dequant in
-fp32, fp32 dot rounded to bf16; act = fusedSwiGLU(gate, up)
+Composed chain (no expert bias): gate/up = gather_qmm per expert, dequant to
+bf16 (stock qmm_n dequantize() into a T tile; the fused kernel matches this),
+fp32 dot rounded to bf16; act = fusedSwiGLU(gate, up)
 = bf16( bf16(gate * LUT[gate]) * up ).
 
 Fused kernel: (A) schedule — thread e = expert e, binary-search its id run,
 emit ceil(count/BM) tiles {start, count, block}; (B) GEMM — per (tile, col-block)
-threadgroup compute gate/up dots (fp32 dequant, fp32 accumulate) + LUT GeGLU.
+threadgroup compute gate/up dots (T-rounded dequant, fp32 accumulate) + LUT GeGLU.
 Validates schedule coverage and that kernel == composed modulo fp32 dot order.
 Memory-light (per-expert dequant, no [Ntot,N] f64).
 
@@ -51,8 +52,10 @@ def build_sigtab():
     return bf16(stable_sigmoid(vals)).astype(np.float32)
 
 
-def dequant_bank(wq, sc, bi, bits, group_size):
-    """wq [N, K*bits/8] uint8, sc/bi [N, K/group] -> [N, K] fp32 (one expert)."""
+def dequant_bank(wq, sc, bi, bits, group_size, round_to_bf16=True):
+    """wq [N, K*bits/8] uint8, sc/bi [N, K/group] -> [N, K] fp32 (one expert).
+    round_to_bf16=True mirrors stock qmm_n dequantize() and the fused kernel
+    (T-rounded weight); False is the raw fp32 dequant used only for f64 truth."""
     N, Kbytes = wq.shape
     K = Kbytes * 8 // bits
     if bits == 4:
@@ -62,7 +65,8 @@ def dequant_bank(wq, sc, bi, bits, group_size):
     else:
         raise ValueError(bits)
     gidx = np.arange(K, dtype=np.int64) // group_size
-    return nibs.astype(np.float32) * sc[:, gidx].astype(np.float32) + bi[:, gidx].astype(np.float32)
+    w = nibs.astype(np.float32) * sc[:, gidx].astype(np.float32) + bi[:, gidx].astype(np.float32)
+    return bf16(w) if round_to_bf16 else w
 
 
 def schedule(inds, BM, num_experts):
@@ -133,8 +137,8 @@ def f64_truth(x, gate_wq, gate_sc, gate_bi, up_wq, up_sc, up_bi, inds, bits, gro
     for expert in range(num_experts):
         rows = np.nonzero(inds == expert)[0]
         if rows.size:
-            g = x[rows].astype(np.float64) @ dequant_bank(gate_wq[expert], gate_sc[expert], gate_bi[expert], bits, group_size).astype(np.float64).T
-            u = x[rows].astype(np.float64) @ dequant_bank(up_wq[expert], up_sc[expert], up_bi[expert], bits, group_size).astype(np.float64).T
+            g = x[rows].astype(np.float64) @ dequant_bank(gate_wq[expert], gate_sc[expert], gate_bi[expert], bits, group_size, False).astype(np.float64).T
+            u = x[rows].astype(np.float64) @ dequant_bank(up_wq[expert], up_sc[expert], up_bi[expert], bits, group_size, False).astype(np.float64).T
             sig = 1.0 / (1.0 + np.exp(-g))
             act[rows] = (g * sig) * u
     return act
