@@ -225,6 +225,7 @@ small — the PLE block's cost is its key/value qmatmuls + dilated conv, not the
    MLX_SERVE_PLE_GATE_FUSED=1 zig build test      # Lever H (PLE gate fusion)
    MLX_SERVE_MOE_GATEUP_NAX=1 zig build test      # NAX gate/up (probe-gated: runs only on NAX hw)
    MLX_SERVE_HC_UP_MIX_NAX=1  zig build test      # NAX HC up+mix (probe-gated)
+   MLX_SERVE_QSA_GROUP=1 MLX_SERVE_QSA_GROUP_NAX=1 zig build test  # NAX grouped QSA (probe-gated)
    MLX_SERVE_PREFILL_TURBO=1 zig build test       # master switch: A–H together
    MLX_SERVE_PREFILL_TURBO=1 MLX_SERVE_QSA_GROUP=0 zig build test  # turbo minus G
    ```
@@ -298,7 +299,12 @@ small — the PLE block's cost is its key/value qmatmuls + dilated conv, not the
   order). Re-measure on M5: if Lever D/B under-deliver, the NAX lane is now
   the M5 follow-up.
 - **Attention/QSA** (~23%): the grouped-query block-reuse gather is now
-  implemented (Lever G, `MLX_SERVE_QSA_GROUP=1`). Still open on the attention
-  side: whether the gather is HBM-bound at all (if it's compute/occupancy-bound
-  the ~G× staging win won't show) — measure per-block HBM reads before betting
-  on it, and consider a G>4 or NAX-form variant only if the M5 profile says so.
+  implemented (Lever G, `MLX_SERVE_QSA_GROUP=1`) AND its cooperative-tensor
+  form (this session): `msv_qsa_group_nax` stacks the 16x32x16 bf16 MMA on the
+  grouped staging so M5 gets the ~G× HBM win and the NAX inner product together
+  (`MLX_SERVE_QSA_GROUP_NAX=0` restores the grouped SIMD inner product;
+  default on, hardware-gated). `research/qsa_group_nax_sim.py` validates the
+  fragment addressing, the union merge, and the chunk-MMA + D-half-exchange S
+  to fp32 order. Still open on M5: whether the gather is HBM-bound at all
+  (measure per-block HBM reads) — if it is compute/occupancy-bound, the NAX
+  inner product is the arm that pays.
