@@ -31807,6 +31807,47 @@ fn getHcUpMixKernel() !mlx.mlx_fast_metal_kernel {
     return kernel;
 }
 
+// NAX cooperative-tensor variant of the fused up+mix GEMM. Same schedule,
+// grid and template args as the plain-SIMD kernel; only the inner product
+// switches from per-lane fp32 FMA to 16x32x16 bf16 MMA. Opt-in
+// (MLX_SERVE_HC_UP_MIX_NAX=1) until it passes on Apple Silicon; gated by the
+// NAX hardware probe (verifyQmmNaxAvailable) like the QSA/MoE NAX lanes.
+var hc_upmix_nax_kernel: ?mlx.mlx_fast_metal_kernel = null;
+var hc_upmix_nax_env: ?bool = null;
+pub var hc_upmix_nax_override: ?bool = null;
+
+pub fn hcUpMixNaxEnabled() bool {
+    if (hc_upmix_nax_override) |v| return v;
+    if (hc_upmix_nax_env) |v| return v;
+    const raw = std.c.getenv("MLX_SERVE_HC_UP_MIX_NAX");
+    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1") and verifyQmmNaxAvailable();
+    hc_upmix_nax_env = enabled;
+    return enabled;
+}
+
+fn getHcUpMixNaxKernel() !mlx.mlx_fast_metal_kernel {
+    if (!verifyQmmNaxAvailable()) return error.NaxUnavailable;
+    if (hc_upmix_nax_kernel) |k| return k;
+    const input_names = [_][*:0]const u8{ "act", "n4", "uw_q", "uw_s", "uw_b", "sigtab", "M_size", "K_size" };
+    const output_names = [_][*:0]const u8{"mixed"};
+    const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+    defer _ = mlx.mlx_vector_string_free(in_vec);
+    const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+    defer _ = mlx.mlx_vector_string_free(out_vec);
+    const kernel = mlx.mlx_fast_metal_kernel_new(
+        "mlxserve_hc_up_mix_nax",
+        in_vec,
+        out_vec,
+        @embedFile("kernels/hc_upmix_nax.metal"),
+        @embedFile("kernels/nax_gemm_header.metal"),
+        true,
+        false,
+    );
+    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+    hc_upmix_nax_kernel = kernel;
+    return kernel;
+}
+
 /// Prefill HC up+mix: `mean_h(sigmoid(act @ up_wᵀ) · n4)` in one dispatch.
 /// `act` [B,S,R], `n4` [B,S,hc,H] (both T), `uw` uint32-packed 4-bit affine
 /// [hc*H, R*4/32], `us`/`ub` [hc*H, R/64]. Returns mixed [B,S,H], or null
@@ -31880,7 +31921,7 @@ pub fn hcUpMixFused(
     const inputs_vec = mlx.mlx_vector_array_new_data(&inputs_arr, inputs_arr.len);
     defer _ = mlx.mlx_vector_array_free(inputs_vec);
 
-    const kernel = try getHcUpMixKernel();
+    const kernel = if (hcUpMixNaxEnabled()) try getHcUpMixNaxKernel() else try getHcUpMixKernel();
     var outputs_vec = mlx.mlx_vector_array_new();
     defer _ = mlx.mlx_vector_array_free(outputs_vec);
     try mlx.check(mlx.mlx_fast_metal_kernel_apply(&outputs_vec, kernel, inputs_vec, hc_upmix_cfg.?, s));
@@ -31890,7 +31931,7 @@ pub fn hcUpMixFused(
     try mlx.check(mlx.mlx_vector_array_get(&mixed, outputs_vec, 0));
     if (!hc_upmix_engaged) {
         hc_upmix_engaged = true;
-        log.info("[hc] fused prefill up+mix kernel engaged: M={d} hc={d} H={d} R={d} {d}-bit g{d}\n", .{ M, hc, H, R, bits, group_size });
+        log.info("[hc] fused prefill up+mix kernel engaged: M={d} hc={d} H={d} R={d} {d}-bit g{d} nax={s}\n", .{ M, hc, H, R, bits, group_size, if (hcUpMixNaxEnabled()) "1" else "0" });
     }
     return mixed;
 }
@@ -37414,6 +37455,16 @@ test "fused HC prefill up+mix kernel matches the composed up/sigmoid/mean chain"
         const got = (try hcUpMixFused(s, act, n4, up.w, up.sc, up.bi, 1, M, HC, H, bits, gs)) orelse return error.HcUpMixDeclined;
         defer _ = mlx.mlx_array_free(got);
         try checkClose(allocator, s, ref, got, @intCast(M * H));
+
+        // NAX cooperative-tensor variant: same composed reference, skipped
+        // where the NAX hardware probe fails (getHcUpMixNaxKernel refuses).
+        if (verifyQmmNaxAvailable()) {
+            hc_upmix_nax_override = true;
+            defer hc_upmix_nax_override = null;
+            const got_nax = (try hcUpMixFused(s, act, n4, up.w, up.sc, up.bi, 1, M, HC, H, bits, gs)) orelse return error.HcUpMixDeclined;
+            defer _ = mlx.mlx_array_free(got_nax);
+            try checkClose(allocator, s, ref, got_nax, @intCast(M * H));
+        }
     }
 
     // Off-geometry must decline, not read out of bounds (H=63 not a multiple of
