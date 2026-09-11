@@ -223,11 +223,16 @@ small — the PLE block's cost is its key/value qmatmuls + dilated conv, not the
    MLX_SERVE_QSA_GROUP=1 zig build test           # Lever G (grouped QSA gather)
    MLX_SERVE_QSA_GROUP=1 MLX_SERVE_QSA_GROUP_G=8 zig build test  # G=8 variant
    MLX_SERVE_PLE_GATE_FUSED=1 zig build test      # Lever H (PLE gate fusion)
+   MLX_SERVE_MOE_GATEUP_NAX=1 zig build test      # NAX gate/up (probe-gated: runs only on NAX hw)
+   MLX_SERVE_HC_UP_MIX_NAX=1  zig build test      # NAX HC up+mix (probe-gated)
    MLX_SERVE_PREFILL_TURBO=1 zig build test       # master switch: A–H together
    MLX_SERVE_PREFILL_TURBO=1 MLX_SERVE_QSA_GROUP=0 zig build test  # turbo minus G
    ```
    Cross-check the fused outputs against `research/*_reference.py` /
-   `*_kernel_sim.py` on a fixed seed if any tolerance looks tight.
+   `*_kernel_sim.py` on a fixed seed if any tolerance looks tight. The NAX
+   variants' parity branches run inside the existing gate/up and up+mix tests
+   whenever `verifyQmmNaxAvailable()` is true, so they are covered by the two
+   `*_NAX=1` lines above (and skipped everywhere else).
 
 3. **GDN production dispatch is already wired** (`gatedDeltaNet` routes through
    `gdnRunYStateChunked` behind `gdnChunkedEnabled/Eligible` + bf16-state +
