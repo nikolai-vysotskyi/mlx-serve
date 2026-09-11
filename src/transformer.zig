@@ -32405,7 +32405,6 @@ const MOE_GATEUP_SCHEDULE_SOURCE =
 const MOE_GATEUP_SOURCE =
     \\// Tiled GEMM + GeGLU epilogue, plain SIMD. One threadgroup per (tile,
     \\// column-block): every slot in a tile shares ONE expert, so the packed
-    \\// gate/up weights for that expert are streamed once per K-block. Dequant
     \\// gate/up weights for that expert are streamed once per K-block. The
     \\// dequantized weight is rounded to T (bf16/f16) exactly like stock
     \\// prefill gather_qmm (affine_gather_qmm_n -> qmm_n_impl dequantize()
@@ -32546,6 +32545,47 @@ fn getMoeGateUpKernel() !mlx.mlx_fast_metal_kernel {
     return kernel;
 }
 
+// NAX cooperative-tensor variant of the fused gate/up GEMM. Same schedule,
+// grid and template args as the plain-SIMD kernel; only the inner product
+// switches from per-lane fp32 FMA to 16x32x16 bf16 MMA. Opt-in
+// (MLX_SERVE_MOE_GATEUP_NAX=1) until it passes on Apple Silicon; gated by the
+// NAX hardware probe (verifyQmmNaxAvailable) like the QSA NAX lane.
+var moe_gateup_nax_kernel: ?mlx.mlx_fast_metal_kernel = null;
+var moe_gateup_nax_env: ?bool = null;
+pub var moe_gateup_nax_override: ?bool = null;
+
+pub fn moeGateUpNaxEnabled() bool {
+    if (moe_gateup_nax_override) |v| return v;
+    if (moe_gateup_nax_env) |v| return v;
+    const raw = std.c.getenv("MLX_SERVE_MOE_GATEUP_NAX");
+    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1") and verifyQmmNaxAvailable();
+    moe_gateup_nax_env = enabled;
+    return enabled;
+}
+
+fn getMoeGateUpNaxKernel() !mlx.mlx_fast_metal_kernel {
+    if (!verifyQmmNaxAvailable()) return error.NaxUnavailable;
+    if (moe_gateup_nax_kernel) |k| return k;
+    const input_names = [_][*:0]const u8{ "x", "inds", "tiles", "w_q", "scales", "biases", "up_w_q", "up_scales", "up_biases", "sigtab", "K_size", "N_size" };
+    const output_names = [_][*:0]const u8{"out"};
+    const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+    defer _ = mlx.mlx_vector_string_free(in_vec);
+    const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+    defer _ = mlx.mlx_vector_string_free(out_vec);
+    const kernel = mlx.mlx_fast_metal_kernel_new(
+        "mlxserve_moe_gateup_nax",
+        in_vec,
+        out_vec,
+        @embedFile("kernels/moe_gateup_nax.metal"),
+        @embedFile("kernels/nax_gemm_header.metal"),
+        true,
+        false,
+    );
+    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+    moe_gateup_nax_kernel = kernel;
+    return kernel;
+}
+
 /// Fused gate/up/GeGLU on the sorted prefill path: replaces the two
 /// gather_qmm calls + fusedSwiGLU. Returns act [Ntot, N] in SORTED order
 /// (the exact expert_act the composed chain produces), or null when the
@@ -32652,14 +32692,14 @@ pub fn moeGateUpFused(
     defer _ = mlx.mlx_vector_array_free(gemm_inputs);
     var gemm_outs = mlx.mlx_vector_array_new();
     defer _ = mlx.mlx_vector_array_free(gemm_outs);
-    try mlx.check(mlx.mlx_fast_metal_kernel_apply(&gemm_outs, try getMoeGateUpKernel(), gemm_inputs, moe_gateup_cfg.?, s));
+    try mlx.check(mlx.mlx_fast_metal_kernel_apply(&gemm_outs, if (moeGateUpNaxEnabled()) try getMoeGateUpNaxKernel() else try getMoeGateUpKernel(), gemm_inputs, moe_gateup_cfg.?, s));
     if (mlx.mlx_vector_array_size(gemm_outs) != 1) return error.MetalKernelBadOutputCount;
     var act = mlx.mlx_array_new();
     errdefer _ = mlx.mlx_array_free(act);
     try mlx.check(mlx.mlx_vector_array_get(&act, gemm_outs, 0));
     if (!moe_gateup_engaged) {
         moe_gateup_engaged = true;
-        log.info("[moe] fused gate+up+GeGLU kernel engaged: E={d} K={d} N={d} rows={d}\n", .{ E, K, N, Ntot });
+        log.info("[moe] fused gate+up+GeGLU kernel engaged: E={d} K={d} N={d} rows={d} nax={s}\n", .{ E, K, N, Ntot, if (moeGateUpNaxEnabled()) "1" else "0" });
     }
     return act;
 }
@@ -37848,6 +37888,18 @@ test "fused prefill gate+up+GeGLU matches gather_qmm + fusedSwiGLU (sorted path)
     defer _ = mlx.mlx_array_free(got);
 
     try checkClose(allocator, s, ref, got, @intCast(Ntot * N));
+
+    // NAX cooperative-tensor variant: same composed reference, skipped where
+    // the NAX hardware probe fails (getMoeGateUpNaxKernel would refuse).
+    if (verifyQmmNaxAvailable()) {
+        moe_gateup_nax_override = true;
+        defer moe_gateup_nax_override = null;
+        const got_nax = (try moeGateUpFused(s, xg, inds_u32, banks[0].w, banks[0].sc, banks[0].bi, banks[1].w, banks[1].sc, banks[1].bi, 4, 64, Ntot, E, K, N)) orelse
+            return error.MoeGateUpDeclined;
+        defer _ = mlx.mlx_array_free(got_nax);
+
+        try checkClose(allocator, s, ref, got_nax, @intCast(Ntot * N));
+    }
 
     // Off-geometry must decline (N=48 is not a multiple of 64).
     const xg_bad = try bf16Random(allocator, rnd, s, &.{ Ntot, K }, 2.0, 0.0);
