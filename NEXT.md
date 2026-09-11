@@ -31,6 +31,11 @@ The first `zig build test` on Mac is expected to surface MSL compile errors.
 
 ## 1. The eight implemented levers (all opt-in, all OFF by default)
 
+All eight are opt-in and default **off**. The master switch
+`MLX_SERVE_PREFILL_TURBO=1` arms the whole set with one flag (per-lever env
+still wins: `=1` forces on, `=0` kills, unset follows turbo; individual
+eligibility guards still apply).
+
 ### Lever A — chunkwise GDN prefill (≈25% of the S=8192 block profile)
 - Files: `src/transformer.zig` (`GDN_CHUNK_KERNEL_{FOLD,SCAN,REPLAY}_BODY`,
   `gdnChunkedEnabled/Eligible`, `gdnRunYStateChunked`, `gdnChunkedParityCase`).
@@ -218,6 +223,8 @@ small — the PLE block's cost is its key/value qmatmuls + dilated conv, not the
    MLX_SERVE_QSA_GROUP=1 zig build test           # Lever G (grouped QSA gather)
    MLX_SERVE_QSA_GROUP=1 MLX_SERVE_QSA_GROUP_G=8 zig build test  # G=8 variant
    MLX_SERVE_PLE_GATE_FUSED=1 zig build test      # Lever H (PLE gate fusion)
+   MLX_SERVE_PREFILL_TURBO=1 zig build test       # master switch: A–H together
+   MLX_SERVE_PREFILL_TURBO=1 MLX_SERVE_QSA_GROUP=0 zig build test  # turbo minus G
    ```
    Cross-check the fused outputs against `research/*_reference.py` /
    `*_kernel_sim.py` on a fixed seed if any tolerance looks tight.

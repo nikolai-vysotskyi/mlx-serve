@@ -187,6 +187,16 @@ fusion (part of ~35%, plain-SIMD) + grouped-query QSA gather (part of ~23%,
 block reuse) + PLE gate+value-modulation fusion (Lever H, small — the PLE
 block's ~456 ms is dominated by its key/value qmatmuls + dilated depthwise
 conv, not the ~10 elementwise gate dispatches it removes).
+
+**Master switch (this session)**: `MLX_SERVE_PREFILL_TURBO=1` arms all eight
+opt-in levers (A–H) with one flag. Precedence per lever: explicit `=1` wins,
+explicit `=0` kills, unset/garbage follows turbo; each lever's own override
+test seam and its eligibility guard are unchanged (turbo widens opt-in, never
+bypasses a geometry/quant/dtype gate). Implemented via `prefillTurboEnabled`
++ `leverOptIn`/`leverOptInFromRaw` (pure, tested) reusing each lever's
+existing env cache, so a lever's first query freezes the turbo decision for
+that lever. Test seam `prefill_turbo_override`; parity test
+"prefill turbo: an explicit per-lever env beats the master switch".
 Remaining: attention/QSA grouped-query block-reuse is now implemented (Lever
 G); still open is whether the gather is HBM-bound at all (measure per-block
 reads on M5 before betting on the ~G× staging win), a NAX perf pass for the
