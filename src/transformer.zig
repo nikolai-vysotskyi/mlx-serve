@@ -223,6 +223,45 @@ fn getGdnKernelSeq(vector_gate: bool) !mlx.mlx_fast_metal_kernel {
 // stage twice the bytes and clamp to 16 via gdnBlockTFor. GDN inputs are NOT
 // always bf16 — an f16 checkpoint promotes its activations to f32).
 
+/// Master switch: MLX_SERVE_PREFILL_TURBO=1 arms the whole opt-in prefill
+/// fusion set (GDN chunked + prefill prework, HC up-mix + write+norm, MoE
+/// down+reduce + gate/up, grouped-QSA gather, PLE gate) with one flag. Each
+/// lever's own env still wins: `=1` forces it on, `=0` kills it, unset
+/// follows turbo. Individual eligibility guards still apply — turbo only
+/// widens the opt-in, it never bypasses a geometry/quant/dtype gate.
+pub var prefill_turbo_override: ?bool = null;
+var prefill_turbo_env: ?bool = null;
+pub fn prefillTurboEnabled() bool {
+    if (prefill_turbo_override) |v| return v;
+    if (prefill_turbo_env) |v| return v;
+    const raw = std.c.getenv("MLX_SERVE_PREFILL_TURBO");
+    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
+    prefill_turbo_env = enabled;
+    return enabled;
+}
+
+/// Pure precedence resolver for `leverOptIn` (kept pure so the precedence is
+/// testable without touching the process env): an explicit `=1` forces the
+/// lever on, an explicit `=0` kills it, anything else (unset, `=`, garbage)
+/// follows the master turbo switch.
+pub fn leverOptInFromRaw(raw: ?[*:0]const u8, turbo: bool) bool {
+    if (raw) |r| {
+        if (std.mem.eql(u8, std.mem.sliceTo(r, 0), "1")) return true;
+        if (std.mem.eql(u8, std.mem.sliceTo(r, 0), "0")) return false;
+    }
+    return turbo;
+}
+
+/// Resolve one lever's opt-in: explicit `=1` wins, explicit `=0` kills,
+/// otherwise the master turbo switch decides. Caches into `cache` exactly
+/// like the per-lever bodies it replaces (so a lever's first query also
+/// freezes the turbo decision for that lever).
+fn leverOptIn(cache: *?bool, name: [*:0]const u8) bool {
+    const v = leverOptInFromRaw(std.c.getenv(name), prefillTurboEnabled());
+    cache.* = v;
+    return v;
+}
+
 /// Test seam: forces the blocked-prefill route on/off without the environment.
 pub var gdn_blocked_override: ?bool = null;
 var gdn_blocked_env_cached: ?bool = null;
@@ -486,11 +525,7 @@ var gdn_chunked_env_cached: ?bool = null;
 /// Chunked prefill route is opt-in (default off) until validated on hardware.
 pub fn gdnChunkedEnabled() bool {
     if (gdn_chunked_override) |v| return v;
-    if (gdn_chunked_env_cached) |v| return v;
-    const raw = std.c.getenv("MLX_SERVE_GDN_CHUNKED");
-    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
-    gdn_chunked_env_cached = enabled;
-    return enabled;
+    return leverOptIn(&gdn_chunked_env_cached, "MLX_SERVE_GDN_CHUNKED");
 }
 
 /// Prefill-width floor for the chunked kernel: below this the launch overhead
@@ -3224,11 +3259,7 @@ var qsa_group_g_cached: ?c_int = null;
 /// HBM reads at prefill, where adjacent tokens share ~their whole selection).
 pub fn qsaGroupEnabled() bool {
     if (qsa_group_override) |v| return v;
-    if (qsa_group_env_cached) |v| return v;
-    const raw = std.c.getenv("MLX_SERVE_QSA_GROUP");
-    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
-    qsa_group_env_cached = enabled;
-    return enabled;
+    return leverOptIn(&qsa_group_env_cached, "MLX_SERVE_QSA_GROUP");
 }
 
 /// Tokens per threadgroup for the grouped gather (MLX_SERVE_QSA_GROUP_G,
@@ -29284,11 +29315,7 @@ var gdn_prefill_fused_env: ?bool = null;
 
 pub fn gdnPrefillFusedEnabled() bool {
     if (gdn_prefill_fused_override) |v| return v;
-    if (gdn_prefill_fused_env) |v| return v;
-    const raw = std.c.getenv("MLX_SERVE_GDN_PREFILL_FUSED");
-    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
-    gdn_prefill_fused_env = enabled;
-    return enabled;
+    return leverOptIn(&gdn_prefill_fused_env, "MLX_SERVE_GDN_PREFILL_FUSED");
 }
 
 fn getGdnPreworkKernel() !mlx.mlx_fast_metal_kernel {
@@ -31761,11 +31788,7 @@ pub var hc_upmix_override: ?bool = null;
 
 fn hcUpMixEnabled() bool {
     if (hc_upmix_override) |v| return v;
-    if (hc_upmix_env) |v| return v;
-    const raw = std.c.getenv("MLX_SERVE_HC_UP_MIX");
-    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
-    hc_upmix_env = enabled;
-    return enabled;
+    return leverOptIn(&hc_upmix_env, "MLX_SERVE_HC_UP_MIX");
 }
 
 fn getHcUpMixKernel() !mlx.mlx_fast_metal_kernel {
@@ -31937,11 +31960,7 @@ pub var hc_writenorm_override: ?bool = null;
 
 fn hcWriteNormEnabled() bool {
     if (hc_writenorm_override) |v| return v;
-    if (hc_writenorm_env) |v| return v;
-    const raw = std.c.getenv("MLX_SERVE_HC_WRITE_NORM");
-    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
-    hc_writenorm_env = enabled;
-    return enabled;
+    return leverOptIn(&hc_writenorm_env, "MLX_SERVE_HC_WRITE_NORM");
 }
 
 /// Rows (batch*seq) the fused HC write+norm serves (MLX_SERVE_HC_WRITE_NORM=1).
@@ -32105,11 +32124,7 @@ pub var moe_down_reduce_override: ?bool = null;
 
 fn moeDownReduceEnabled() bool {
     if (moe_down_reduce_override) |v| return v;
-    if (moe_down_reduce_env) |v| return v;
-    const raw = std.c.getenv("MLX_SERVE_MOE_DOWN_REDUCE");
-    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
-    moe_down_reduce_env = enabled;
-    return enabled;
+    return leverOptIn(&moe_down_reduce_env, "MLX_SERVE_MOE_DOWN_REDUCE");
 }
 
 fn getMoeDownReduceKernel() !mlx.mlx_fast_metal_kernel {
@@ -32257,11 +32272,7 @@ pub var ple_gate_override: ?bool = null;
 
 fn pleGateFusedEnabled() bool {
     if (ple_gate_override) |v| return v;
-    if (ple_gate_env) |v| return v;
-    const raw = std.c.getenv("MLX_SERVE_PLE_GATE_FUSED");
-    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
-    ple_gate_env = enabled;
-    return enabled;
+    return leverOptIn(&ple_gate_env, "MLX_SERVE_PLE_GATE_FUSED");
 }
 
 fn getPleGateKernel() !mlx.mlx_fast_metal_kernel {
@@ -32500,11 +32511,7 @@ pub var moe_gateup_override: ?bool = null;
 
 fn moeGateUpEnabled() bool {
     if (moe_gateup_override) |v| return v;
-    if (moe_gateup_env) |v| return v;
-    const raw = std.c.getenv("MLX_SERVE_MOE_GATEUP_FUSED");
-    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
-    moe_gateup_env = enabled;
-    return enabled;
+    return leverOptIn(&moe_gateup_env, "MLX_SERVE_MOE_GATEUP_FUSED");
 }
 
 fn getMoeGateUpScheduleKernel() !mlx.mlx_fast_metal_kernel {
@@ -54204,6 +54211,28 @@ test "diagEnvOnCached answers once and latches" {
     try testing.expectEqual(@as(?bool, false), cache);
     cache = true;
     try testing.expectEqual(true, diagEnvOnCached(&cache, "MLX_SERVE_NO_SUCH_DIAG_SWITCH_PROBE"));
+}
+
+test "prefill turbo: an explicit per-lever env beats the master switch" {
+    // leverOptInFromRaw is pure on purpose — the precedence table needs no env.
+    try testing.expectEqual(true, leverOptInFromRaw("1", false));
+    try testing.expectEqual(true, leverOptInFromRaw("1", true));
+    try testing.expectEqual(false, leverOptInFromRaw("0", true));
+    try testing.expectEqual(false, leverOptInFromRaw("0", false));
+    try testing.expectEqual(true, leverOptInFromRaw(null, true));
+    try testing.expectEqual(false, leverOptInFromRaw(null, false));
+    try testing.expectEqual(true, leverOptInFromRaw("", true));
+    try testing.expectEqual(true, leverOptInFromRaw("yes", true));
+
+    // The master switch: override seam first, then env (absent here → false).
+    const saved = prefill_turbo_override;
+    defer prefill_turbo_override = saved;
+    prefill_turbo_override = true;
+    prefill_turbo_env = null;
+    try testing.expectEqual(true, prefillTurboEnabled());
+    prefill_turbo_override = false;
+    prefill_turbo_env = null;
+    try testing.expectEqual(false, prefillTurboEnabled());
 }
 
 test "qsa select tg policy: a pure function of rows, forced width wins" {
