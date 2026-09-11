@@ -17308,9 +17308,15 @@ pub const Transformer = struct {
     /// Grouped RMS norm over the last `hidden` of each of the `hc` streams:
     /// `x [B,S,hc*hidden]` → `[B,S,hc,hidden]`, weight `[hc,hidden]` (already
     /// carrying the reference's +1). Caller frees.
+    ///
+    /// Below: the fused kernel this can dispatch into (opt-in), gated by
+    /// `hcNormFusedEnabled`.
     fn hcGroupNorm(self: *Transformer, x: mlx.mlx_array, w: mlx.mlx_array, batch: c_int, seq_len: c_int) !mlx.mlx_array {
         const hc: c_int = @intCast(self.config.hc_count);
         const hidden: c_int = @intCast(self.config.hidden_size);
+        if (hcNormFusedEnabled()) {
+            if (try hcGroupNormFused(self.s, x, w, self.rms_eps_arr, batch, seq_len, hc, hidden)) |out| return out;
+        }
         const shape4 = [_]c_int{ batch, seq_len, hc, hidden };
         var x4 = mlx.mlx_array_new();
         defer _ = mlx.mlx_array_free(x4);
@@ -30888,6 +30894,89 @@ fn hcFusedEnabled() bool {
     const enabled = raw == null or !std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "0");
     hc_fused_env = enabled;
     return enabled;
+}
+
+// ── Fused HC group-norm (prefill): rms_norm(ones) + multiply(w) → one kernel ──
+// Opt-in (unlike the decode-width HC read/write fusions above, which default
+// on): `hcGroupNorm` runs at every prefill width, so a new default needs its
+// own soak before flipping, hence MLX_SERVE_HC_NORM_FUSED starting at off.
+var hc_norm_fused_env: ?bool = null;
+pub var hc_norm_fused_override: ?bool = null;
+
+fn hcNormFusedEnabled() bool {
+    if (hc_norm_fused_override) |v| return v;
+    if (hc_norm_fused_env) |v| return v;
+    const raw = std.c.getenv("MLX_SERVE_HC_NORM_FUSED");
+    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
+    hc_norm_fused_env = enabled;
+    return enabled;
+}
+
+const HC_GROUP_NORM_SOURCE = @embedFile("kernels/hc_group_norm.metal");
+var hc_group_norm_kernel: ?mlx.mlx_fast_metal_kernel = null;
+var hc_norm_fused_engaged = false;
+
+fn getHcGroupNormKernel() !mlx.mlx_fast_metal_kernel {
+    if (hc_group_norm_kernel) |k| return k;
+    const input_names = [_][*:0]const u8{ "x", "w", "eps" };
+    const output_names = [_][*:0]const u8{"out"};
+    const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+    defer _ = mlx.mlx_vector_string_free(in_vec);
+    const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+    defer _ = mlx.mlx_vector_string_free(out_vec);
+    const kernel = mlx.mlx_fast_metal_kernel_new(
+        "mlxserve_hc_group_norm",
+        in_vec,
+        out_vec,
+        HC_GROUP_NORM_SOURCE,
+        "",
+        true,
+        false,
+    );
+    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+    hc_group_norm_kernel = kernel;
+    return kernel;
+}
+
+/// `hcGroupNorm`, one Metal launch: `rms_norm(x, ones) * w` fused so the real
+/// `[hc,hidden]` weight lands in the same pass (`mlx_fast_rms_norm`'s weight
+/// arg is stuck at shape `[hidden]`, which is why the chain needs two ops —
+/// see `hcGroupNorm`). `x` is the `[B,S,hc,hidden]` view (bf16), `w` the
+/// `[hc,hidden]` per-stream weight (bf16), `eps_arr` a 0-dim f32 scalar.
+/// Null on ineligible geometry/dtype; caller keeps the composed chain.
+fn hcGroupNormFused(s: mlx.mlx_stream, x: mlx.mlx_array, w: mlx.mlx_array, eps_arr: mlx.mlx_array, batch: c_int, seq_len: c_int, hc: c_int, hidden: c_int) !?mlx.mlx_array {
+    if (@rem(hidden, 256) != 0) return null;
+    if (mlx.mlx_array_dtype(x) != .bfloat16 or mlx.mlx_array_dtype(w) != .bfloat16) return null;
+    const shape4 = [_]c_int{ batch, seq_len, hc, hidden };
+    var x4 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(x4);
+    try mlx.check(mlx.mlx_reshape(&x4, x, &shape4, 4, s));
+
+    const rows = batch * seq_len * hc;
+    const config = mlx.mlx_fast_metal_kernel_config_new();
+    defer _ = mlx.mlx_fast_metal_kernel_config_free(config);
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &shape4, 4, .bfloat16));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(config, rows * 256, 1, 1));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(config, 256, 1, 1));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(config, "T", .bfloat16));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "HID", hidden));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "HC", hc));
+
+    const kernel = try getHcGroupNormKernel();
+    const inputs_arr = [_]mlx.mlx_array{ x4, w, eps_arr };
+    const inputs_vec = mlx.mlx_vector_array_new_data(&inputs_arr, inputs_arr.len);
+    defer _ = mlx.mlx_vector_array_free(inputs_vec);
+    var outputs_vec = mlx.mlx_vector_array_new();
+    defer _ = mlx.mlx_vector_array_free(outputs_vec);
+    try mlx.check(mlx.mlx_fast_metal_kernel_apply(&outputs_vec, kernel, inputs_vec, config, s));
+    if (mlx.mlx_vector_array_size(outputs_vec) != 1) return error.MetalKernelBadOutputCount;
+    var out = mlx.mlx_array_new();
+    try mlx.check(mlx.mlx_vector_array_get(&out, outputs_vec, 0));
+    if (!hc_norm_fused_engaged) {
+        hc_norm_fused_engaged = true;
+        log.info("[hc-norm] engaged: rows={d} hidden={d}\n", .{ rows, hidden });
+    }
+    return out;
 }
 
 fn getHcFusedKernel(which: usize) !mlx.mlx_fast_metal_kernel {
@@ -53330,4 +53419,230 @@ test "qsa select tg policy: a pure function of rows, forced width wins" {
     try testing.expectEqual(@as(c_int, 512), qsaSelectTgFor(4096));
     try testing.expectEqual(@as(c_int, 512), qsaSelectTgFor(1));
     qsa_select_tg_cached = null;
+}
+
+/// The gap between adjacent bf16-representable values around `v`: bf16 has 7
+/// explicit mantissa bits, so ulp(v) = 2^(floor(log2(|v|)) - 7). Built by
+/// shifting the f32 exponent field directly rather than through log2/pow, so
+/// it is exact at every magnitude the parity test below produces.
+fn bf16UlpF32(v: f32) f32 {
+    const av = @abs(v);
+    if (av == 0.0) return @as(f32, @bitCast(@as(u32, 1)));
+    const bits: u32 = @bitCast(av);
+    const orig_biased: i32 = @intCast(bits >> 23);
+    const ulp_biased = orig_biased - 7;
+    if (ulp_biased <= 0) return @as(f32, @bitCast(@as(u32, 1)));
+    return @as(f32, @bitCast(@as(u32, @intCast(ulp_biased)) << 23));
+}
+
+test "hc group norm fused: within 2 bf16 ulps of the op chain and no worse vs f32 (S 17/130/8192, B 1/2)" {
+    if (mlx.noGpuBackend()) return error.SkipZigTest;
+    const s = mlx.gpuStream();
+    const a = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x4844_1517);
+    const rnd = prng.random();
+    hc_norm_fused_override = true;
+    defer hc_norm_fused_override = null;
+    _ = mlx.mlx_random_seed(0x4844_1517);
+
+    const HC: c_int = 4;
+    const H: c_int = 2560;
+    const eps: f32 = 1e-6;
+    const eps_arr = mlx.mlx_array_new_float(eps);
+    defer _ = mlx.mlx_array_free(eps_arr);
+
+    const bf16UniformHost = struct {
+        fn f(al: std.mem.Allocator, r: std.Random, st: mlx.mlx_stream, shape: []const c_int, scale: f32, offset: f32) !mlx.mlx_array {
+            var n: usize = 1;
+            for (shape) |d| n *= @intCast(d);
+            const buf = try al.alloc(f32, n);
+            defer al.free(buf);
+            for (buf) |*v| v.* = (r.float(f32) - 0.5) * scale + offset;
+            const a32 = mlx.mlx_array_new_data(buf.ptr, shape.ptr, @intCast(shape.len), .float32);
+            defer _ = mlx.mlx_array_free(a32);
+            var out = mlx.mlx_array_new();
+            try mlx.check(mlx.mlx_astype(&out, a32, .bfloat16, st));
+            return out;
+        }
+    }.f;
+
+    // Weight [HC,H] in [0.5, 1.5), fixed across cases.
+    const w = try bf16UniformHost(a, rnd, s, &.{ HC, H }, 1.0, 1.0);
+    defer _ = mlx.mlx_array_free(w);
+    const one_val = bf16Scalar(1.0, s);
+    defer _ = mlx.mlx_array_free(one_val);
+    const h_shape = [_]c_int{H};
+    var ones = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(ones);
+    try mlx.check(mlx.mlx_full(&ones, &h_shape, 1, one_val, .bfloat16, s));
+
+    const w_n: usize = @intCast(HC * H);
+    const w_h = try a.alloc(f32, w_n);
+    defer a.free(w_h);
+    try testReadF32(w, w_h, s);
+
+    const cases = [_]struct { seq: c_int, batch: c_int }{
+        .{ .seq = 17, .batch = 1 },
+        .{ .seq = 17, .batch = 2 },
+        .{ .seq = 130, .batch = 1 },
+        .{ .seq = 130, .batch = 2 },
+        .{ .seq = 8192, .batch = 1 },
+        .{ .seq = 8192, .batch = 2 },
+    };
+
+    for (cases) |cs| {
+        const B = cs.batch;
+        const S = cs.seq;
+        const hidden_u: usize = @intCast(H);
+        const hc_u: usize = @intCast(HC);
+        const rows: usize = @as(usize, @intCast(B)) * @as(usize, @intCast(S)) * hc_u;
+        const n: usize = rows * hidden_u;
+
+        // x ~ N(0,1), bf16-truncated (generated on-device: n runs into the
+        // hundreds of millions at S=8192, B=2, too slow to fill host-side).
+        var x_f32 = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(x_f32);
+        const x_shape = [_]c_int{ B, S, HC * H };
+        try mlx.check(mlx.mlx_random_normal(&x_f32, &x_shape, 3, .float32, 0.0, 1.0, .{ .ctx = null }, s));
+        var x = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(x);
+        try mlx.check(mlx.mlx_astype(&x, x_f32, .bfloat16, s));
+
+        // Composed chain: today's rms_norm(ones) + multiply(w).
+        const shape4 = [_]c_int{ B, S, HC, H };
+        var x4 = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(x4);
+        try mlx.check(mlx.mlx_reshape(&x4, x, &shape4, 4, s));
+        var n4raw = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(n4raw);
+        try mlx.check(mlx.mlx_fast_rms_norm(&n4raw, x4, ones, eps, s));
+        var chain = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(chain);
+        try mlx.check(mlx.mlx_multiply(&chain, n4raw, w, s));
+
+        const fused = (try hcGroupNormFused(s, x, w, eps_arr, B, S, HC, H)) orelse return error.HcNormFusedDeclined;
+        defer _ = mlx.mlx_array_free(fused);
+
+        const x_h = try a.alloc(f32, n);
+        defer a.free(x_h);
+        try testReadF32(x, x_h, s);
+        const fused_h = try a.alloc(f32, n);
+        defer a.free(fused_h);
+        try testReadF32(fused, fused_h, s);
+        const chain_h = try a.alloc(f32, n);
+        defer a.free(chain_h);
+        try testReadF32(chain, chain_h, s);
+
+        // f32 reference: the whole thing (sum-of-squares, rsqrt, weight
+        // multiply) in float32, from the same bf16-truncated x/w.
+        var max_ulp_ratio: f32 = 0;
+        var max_diff_fused: f32 = 0;
+        var max_diff_chain: f32 = 0;
+        var row_base: usize = 0;
+        while (row_base < n) : (row_base += hidden_u) {
+            const row = row_base / hidden_u;
+            var ss: f32 = 0;
+            for (0..hidden_u) |i| {
+                const xv = x_h[row_base + i];
+                ss += xv * xv;
+            }
+            const rr: f32 = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(hidden_u)) + eps);
+            const wbase = (row % hc_u) * hidden_u;
+            for (0..hidden_u) |i| {
+                const ref = x_h[row_base + i] * rr * w_h[wbase + i];
+                const ch = chain_h[row_base + i];
+                const fu = fused_h[row_base + i];
+                const ulp = bf16UlpF32(ch);
+                const ratio = @abs(fu - ch) / ulp;
+                if (ratio > max_ulp_ratio) max_ulp_ratio = ratio;
+                const df = @abs(fu - ref);
+                const dc = @abs(ch - ref);
+                if (df > max_diff_fused) max_diff_fused = df;
+                if (dc > max_diff_chain) max_diff_chain = dc;
+            }
+        }
+        std.debug.print("[hc-norm-parity] B={d} S={d} max|fused-chain|/ulp={d:.3} max|fused-f32|={e:.6} max|chain-f32|={e:.6}\n", .{ B, S, max_ulp_ratio, max_diff_fused, max_diff_chain });
+        try testing.expect(max_ulp_ratio <= 2.0);
+        try testing.expect(max_diff_fused <= max_diff_chain);
+    }
+}
+
+test "hc-norm-ubench: composed vs fused group norm (env-gated: MLX_SERVE_HC_UBENCH=1, ReleaseFast)" {
+    const raw = std.c.getenv("MLX_SERVE_HC_UBENCH");
+    if (raw == null or std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "0")) return;
+    if (mlx.noGpuBackend()) return error.SkipZigTest;
+    const s = mlx.gpuStream();
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    const B: c_int = 1;
+    const S: c_int = 8192;
+    const HC: c_int = 4;
+    const H: c_int = 2560;
+    const eps: f32 = 1e-6;
+    const eps_arr = mlx.mlx_array_new_float(eps);
+    defer _ = mlx.mlx_array_free(eps_arr);
+
+    var x_f32 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(x_f32);
+    const x_shape = [_]c_int{ B, S, HC * H };
+    try mlx.check(mlx.mlx_random_normal(&x_f32, &x_shape, 3, .float32, 0.0, 1.0, .{ .ctx = null }, s));
+    var x = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(x);
+    try mlx.check(mlx.mlx_astype(&x, x_f32, .bfloat16, s));
+
+    var w_f32 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(w_f32);
+    const w_shape = [_]c_int{ HC, H };
+    try mlx.check(mlx.mlx_random_normal(&w_f32, &w_shape, 2, .float32, 1.0, 0.2, .{ .ctx = null }, s));
+    var w = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(w);
+    try mlx.check(mlx.mlx_astype(&w, w_f32, .bfloat16, s));
+
+    const one_val = bf16Scalar(1.0, s);
+    defer _ = mlx.mlx_array_free(one_val);
+    const h_shape = [_]c_int{H};
+    var ones = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(ones);
+    try mlx.check(mlx.mlx_full(&ones, &h_shape, 1, one_val, .bfloat16, s));
+
+    const evalOne = struct {
+        fn f(arr: mlx.mlx_array) !void {
+            const ev = mlx.mlx_vector_array_new();
+            defer _ = mlx.mlx_vector_array_free(ev);
+            _ = mlx.mlx_vector_array_append_value(ev, arr);
+            try mlx.check(mlx.mlx_eval(ev));
+        }
+    }.f;
+
+    const warmup: usize = 3;
+    const iters: usize = 10;
+
+    var mark = std.Io.Timestamp.now(io, .boot);
+    for (0..warmup + iters) |i| {
+        if (i == warmup) mark = std.Io.Timestamp.now(io, .boot);
+        const shape4 = [_]c_int{ B, S, HC, H };
+        var x4 = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(x4);
+        try mlx.check(mlx.mlx_reshape(&x4, x, &shape4, 4, s));
+        var n4raw = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(n4raw);
+        try mlx.check(mlx.mlx_fast_rms_norm(&n4raw, x4, ones, eps, s));
+        var out = mlx.mlx_array_new();
+        try mlx.check(mlx.mlx_multiply(&out, n4raw, w, s));
+        try evalOne(out);
+        _ = mlx.mlx_array_free(out);
+    }
+    const composed_ns: u64 = @intCast(mark.untilNow(io, .boot).nanoseconds);
+
+    for (0..warmup + iters) |i| {
+        if (i == warmup) mark = std.Io.Timestamp.now(io, .boot);
+        const out = (try hcGroupNormFused(s, x, w, eps_arr, B, S, HC, H)) orelse return error.HcNormFusedDeclined;
+        try evalOne(out);
+        _ = mlx.mlx_array_free(out);
+    }
+    const fused_ns: u64 = @intCast(mark.untilNow(io, .boot).nanoseconds);
+
+    const composed_ms = @as(f64, @floatFromInt(composed_ns)) / @as(f64, @floatFromInt(iters)) / 1e6;
+    const fused_ms = @as(f64, @floatFromInt(fused_ns)) / @as(f64, @floatFromInt(iters)) / 1e6;
+    std.debug.print("[hc-norm-ubench] S=8192 composed={d:.4} fused={d:.4} ms\n", .{ composed_ms, fused_ms });
 }
