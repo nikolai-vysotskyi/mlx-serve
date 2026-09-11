@@ -32404,10 +32404,15 @@ const MOE_GATEUP_SOURCE =
     \\// Tiled GEMM + GeGLU epilogue, plain SIMD. One threadgroup per (tile,
     \\// column-block): every slot in a tile shares ONE expert, so the packed
     \\// gate/up weights for that expert are streamed once per K-block. Dequant
-    \\// stays in fp32 exactly like MLX's quantized matmul / gatherQmv
-    \\// (q*scale+bias computed in fp32, no intermediate bf16 rounding of the
-    \\// weight — rounding the weight to bf16 would NOT match gather_qmm), and
-    \\// the fp32 dot is rounded to bf16 gate/up once at the end.
+    \\// stays in fp32 (q*scale+bias computed in fp32, no intermediate
+    \\// bf16 rounding of the weight). NOTE: stock prefill gather_qmm
+    \\// (affine_gather_qmm_n -> qmm_n_impl) DOES round the dequantized
+    \\// weight to bf16 (dequantize() into a bf16 tile + BlockMMA<bf16,
+    \\// bf16>); keeping fp32 here is strictly closer to fp32 ground truth
+    \\// but NOT bit-identical to stock, so the parity tests hold this
+    \\// kernel to the fp32-dequant reference and a 2e-2 bf16 tolerance vs
+    \\// the composed chain. The fp32 dot rounds to bf16 gate/up once at
+    \\// the end.
     \\constexpr int BM = 64;
     \\constexpr int BN = 64;
     \\constexpr int BK = 64;
