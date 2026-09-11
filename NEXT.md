@@ -1,5 +1,9 @@
 # NEXT.md — Apple Silicon (M5 Max, 128 GB) validation handoff
 
+> **M5 validation done 2026-09-11 — see `REPORT-M5.md`.** Suite 4 red → 2 red after fixes;
+> `PREFILL_TURBO=1` is 0.26× of upstream and wrong; no lever is a whole-model win as
+> implemented. Per-lever tok/s, root causes and next steps are in the report.
+
 **For:** the agent with a real Mac (M5-class GPU, macOS, Metal, bundled MLX with NAX).
 **Prepared by:** the cloud Linux agent (no Metal; all kernels below are UNBUILT
 on Metal, CPU-validated only). Date: 2026-09-10.

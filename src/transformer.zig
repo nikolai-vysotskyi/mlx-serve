@@ -32291,12 +32291,14 @@ pub fn hcWriteNormFused(
 // (coalesced within a warp — lanes share the same (t,k) and stride over
 // hidden) and writes `sum_k bf16(down[inv[t*K+k]] * scores[t,k])` directly.
 //
-// Rounding matches the composed chain exactly (research/moe_down_reduce_-
-// reference.py): bf16 product (mlx_multiply), fp32 accumulation (MLX Reduce
-// widens bfloat16 accumulators to float32 — see mlx/backend/cpu/reduce.cpp
-// ReductionAccumulator::widen_to_float), single bf16 rounding at the end.
-// On-device the two differ only by the fp32 sum's reduction order (simd tree
-// vs left fold), i.e. << 1 bf16 ULP.
+// Rounding matches the composed chain EXACTLY on the Metal backend. MLX's
+// Metal `sum` over a bf16 axis of length K does NOT accumulate in fp32 (that is
+// the CPU backend's ReductionAccumulator); `col_reduce_small` keeps 8 partial
+// sums in the INPUT dtype — partial[g] folds slots g, g+8, g+16, … ascending —
+// then combines partial[0] + partial[1] + … + partial[7] in order. Reproducing
+// that order gives a bit-identical result (measured 2026-09-07: zero diff over
+// 10.5 M outputs at T=4096/K=10/H=2560, 2.31 -> 0.67 ms); a plain fp32 left
+// fold was 1.4x outside the parity tolerance on M5.
 //
 // Opt-in until it passes on Apple Silicon: MLX_SERVE_MOE_DOWN_REDUCE=1 (off by
 // default; everything else keeps the composed chain). Grid = (H/4, T) threads
@@ -32304,20 +32306,27 @@ pub fn hcWriteNormFused(
 const MOE_DOWN_REDUCE_SOURCE =
     \\uint j0 = thread_position_in_grid.x * 4;
     \\uint t = thread_position_in_grid.y;
-    \\float acc0 = 0.0f, acc1 = 0.0f, acc2 = 0.0f, acc3 = 0.0f;
-    \\for (int k = 0; k < K; ++k) {
-    \\    uint n = inv[(size_t)t * K + k];
-    \\    float sf = float(scores[(size_t)t * K + k]);
-    \\    const device T* dp = down + (size_t)n * H + j0;
-    \\    T d0 = dp[0], d1 = dp[1], d2 = dp[2], d3 = dp[3];
-    \\    T p0 = T(float(d0) * sf);
-    \\    T p1 = T(float(d1) * sf);
-    \\    T p2 = T(float(d2) * sf);
-    \\    T p3 = T(float(d3) * sf);
-    \\    acc0 += float(p0); acc1 += float(p1); acc2 += float(p2); acc3 += float(p3);
+    \\constexpr int GROUPS = K < 8 ? K : 8;
+    \\T acc0 = T(0.0f), acc1 = T(0.0f), acc2 = T(0.0f), acc3 = T(0.0f);
+    \\for (int g = 0; g < GROUPS; ++g) {
+    \\    T q0 = T(0.0f), q1 = T(0.0f), q2 = T(0.0f), q3 = T(0.0f);
+    \\    for (int k = g; k < K; k += GROUPS) {
+    \\        uint n = inv[(size_t)t * K + k];
+    \\        T sf = scores[(size_t)t * K + k];
+    \\        const device T* dp = down + (size_t)n * H + j0;
+    \\        // bf16 product (mlx_multiply), then a bf16 add in ascending slot order.
+    \\        q0 = T(float(dp[0]) * float(sf)) + q0;
+    \\        q1 = T(float(dp[1]) * float(sf)) + q1;
+    \\        q2 = T(float(dp[2]) * float(sf)) + q2;
+    \\        q3 = T(float(dp[3]) * float(sf)) + q3;
+    \\    }
+    \\    acc0 = (g == 0) ? q0 : q0 + acc0;
+    \\    acc1 = (g == 0) ? q1 : q1 + acc1;
+    \\    acc2 = (g == 0) ? q2 : q2 + acc2;
+    \\    acc3 = (g == 0) ? q3 : q3 + acc3;
     \\}
     \\device T* op = out + (size_t)t * H + j0;
-    \\op[0] = T(acc0); op[1] = T(acc1); op[2] = T(acc2); op[3] = T(acc3);
+    \\op[0] = acc0; op[1] = acc1; op[2] = acc2; op[3] = acc3;
 ;
 
 const MoeDownReduceKey = struct { h: c_int, k: c_int, t: c_int, dtype: mlx.mlx_dtype };
