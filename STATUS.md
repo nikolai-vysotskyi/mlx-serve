@@ -133,6 +133,16 @@ prefix-cache 0, MTP off). Target M5 Max 128 GB; agent runs cloud Linux
   token reads the same staged K/V tile; per-token online softmax stays
   per-row/per-simdgroup. Uses `SENTINEL = 2147483647` (no bare `INT_MAX`, like
   the QSA select kernel) + the stock `ATTN256_KERNEL_HEADER` mma primitives +
+- NAX form: `msv_qsa_group_nax` (`src/kernels/qsa_group_nax.metal`) stacks the
+  16x32x16 bf16 MMA on the grouped staging (Lever G's HBM win + the
+  cooperative-tensor inner product together). Two simdgroups split D=256 per
+  token (band*128); their fp32 partial-S halves are exchanged through the KV
+  staging buffer (K is dead by then, no extra tgmem); the union merge, per-token
+  `-inf` masks, online softmax, and the two-bf16-term (Shi/Slo) PV epilogue are
+  ported from `msv_qsa_nax_precise`. BK=32, LD=264, 16.5 KiB tgmem.
+  `MLX_SERVE_QSA_GROUP_NAX=1` (default on, `=0` kills), hardware-gated;
+  `research/qsa_group_nax_sim.py` validates fragment addressing, union merge,
+  and the chunk-MMA + D-half-exchange S to fp32 order. Awaits the M5 run.
   `static_assert`s for the two gates. Grid `⌈qL/G⌉·32 × Hkv·NSG·G × B`.
 - `research/qsa_group_reference.py` PASS: union→per-token sequences EXACT for
   every group (incl. partial last group + tail-block/selected-block overlap);
@@ -205,11 +215,10 @@ existing env cache, so a lever's first query freezes the turbo decision for
 that lever. Test seam `prefill_turbo_override`; parity test
 "prefill turbo: an explicit per-lever env beats the master switch".
 Remaining: attention/QSA grouped-query block-reuse is now implemented (Lever
-G); still open is whether the gather is HBM-bound at all (measure per-block
-reads on M5 before betting on the ~G× staging win). The NAX perf pass for the
-MoE gate/up and HC up-mix GEMMs is now IMPLEMENTED (opt-in
-`MLX_SERVE_MOE_GATEUP_NAX=1` / `MLX_SERVE_HC_UP_MIX_NAX=1`, cooperative-tensor
-bf16×bf16→fp32 MMA, same schedule as the plain-SIMD kernels) and awaits the
-M5 re-measure to see if it matters at prefill scale. Possibly a G>4 / NAX-form
-grouped gather if the profile calls for it. None of the individual levers
-reaches 1.5× alone.
+G) and its cooperative-tensor form (`msv_qsa_group_nax`) is too; still open is
+whether the gather is HBM-bound at all (measure per-block reads on M5 before
+betting on the ~G× staging win). The NAX perf pass for the MoE gate/up and HC
+up-mix GEMMs is now IMPLEMENTED (opt-in `MLX_SERVE_MOE_GATEUP_NAX=1` /
+`MLX_SERVE_HC_UP_MIX_NAX=1`, cooperative-tensor bf16×bf16→fp32 MMA, same
+schedule as the plain-SIMD kernels) and awaits the M5 re-measure to see if it
+matters at prefill scale. None of the individual levers reaches 1.5× alone.
