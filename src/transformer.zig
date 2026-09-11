@@ -38964,6 +38964,185 @@ fn gdnHostRef(
     return .{ .y = y, .state = st_out };
 }
 
+/// f64 host ground truth of the CHUNKWISE (WY) form of the same recurrence:
+/// per chunk of C tokens solve (I + A)·W = Kg and (I + A)·U = Vb by forward
+/// substitution, then fold the whole chunk into the state with one rank-C
+/// update. The Metal chunk kernels are written against this decomposition, so
+/// it must agree with `gdnHostRef` up to f64 summation order.
+fn gdnChunkRef(
+    al: std.mem.Allocator,
+    qd: []const f32,
+    kd: []const f32,
+    vd: []const f32,
+    gd: []const f32,
+    bd: []const f32,
+    sd: []const f32,
+    B: usize,
+    T: usize,
+    Hk: usize,
+    Hv: usize,
+    Dk: usize,
+    Dv: usize,
+    C: usize,
+) !GdnHostRef {
+    const y = try al.alloc(f32, B * T * Hv * Dv);
+    errdefer al.free(y);
+    const st_out = try al.alloc(f32, B * Hv * Dv * Dk);
+    errdefer al.free(st_out);
+    const S = try al.alloc(f64, Dv * Dk);
+    defer al.free(S);
+    const Kt = try al.alloc(f64, C * Dk);
+    defer al.free(Kt);
+    const Qt = try al.alloc(f64, C * Dk);
+    defer al.free(Qt);
+    const Vt = try al.alloc(f64, C * Dv);
+    defer al.free(Vt);
+    const beta = try al.alloc(f64, C);
+    defer al.free(beta);
+    const lg = try al.alloc(f64, C);
+    defer al.free(lg);
+    const A = try al.alloc(f64, C * C);
+    defer al.free(A);
+    const P = try al.alloc(f64, C * C);
+    defer al.free(P);
+    const Kg = try al.alloc(f64, C * Dk);
+    defer al.free(Kg);
+    const Vb = try al.alloc(f64, C * Dv);
+    defer al.free(Vb);
+    const W = try al.alloc(f64, C * Dk);
+    defer al.free(W);
+    const U = try al.alloc(f64, C * Dv);
+    defer al.free(U);
+    const Kd = try al.alloc(f64, C * Dk);
+    defer al.free(Kd);
+    const Qg = try al.alloc(f64, C * Dk);
+    defer al.free(Qg);
+    const Qeff = try al.alloc(f64, C * Dk);
+    defer al.free(Qeff);
+    const Yloc = try al.alloc(f64, C * Dv);
+    defer al.free(Yloc);
+    const Vnew = try al.alloc(f64, C * Dv);
+    defer al.free(Vnew);
+
+    const group = Hv / Hk;
+    const NC = (T + C - 1) / C;
+    for (0..B) |b| {
+        for (0..Hv) |hv| {
+            const hk = hv / group;
+            for (0..Dv) |dvi| {
+                for (0..Dk) |dki| S[dvi * Dk + dki] = sd[((b * Hv + hv) * Dv + dvi) * Dk + dki];
+            }
+            for (0..NC) |c| {
+                const t0 = c * C;
+                const tt = @min(C, T - t0);
+                // Rows i >= tt are padding: k = q = v = beta = 0 and log g = 0,
+                // so they fall out of the solve and leave the state untouched.
+                var cum: f64 = 0;
+                for (0..C) |i| {
+                    if (i < tt) {
+                        const t = t0 + i;
+                        const kb = ((b * T + t) * Hk + hk) * Dk;
+                        for (0..Dk) |d| {
+                            Kt[i * Dk + d] = kd[kb + d];
+                            Qt[i * Dk + d] = qd[kb + d];
+                        }
+                        const vb = ((b * T + t) * Hv + hv) * Dv;
+                        for (0..Dv) |d| Vt[i * Dv + d] = vd[vb + d];
+                        beta[i] = bd[(b * T + t) * Hv + hv];
+                        // Clamping log g guards g == 0 (the decay underflows to 0 anyway).
+                        cum += @max(@log(@as(f64, gd[(b * T + t) * Hv + hv])), -80.0);
+                    } else {
+                        @memset(Kt[i * Dk ..][0..Dk], 0);
+                        @memset(Qt[i * Dk ..][0..Dk], 0);
+                        @memset(Vt[i * Dv ..][0..Dv], 0);
+                        beta[i] = 0;
+                    }
+                    lg[i] = cum;
+                }
+                const Gc = @exp(lg[C - 1]);
+
+                for (0..C) |i| {
+                    for (0..C) |j| {
+                        if (j > i) {
+                            A[i * C + j] = 0;
+                            P[i * C + j] = 0;
+                            continue;
+                        }
+                        const dij = @exp(lg[i] - lg[j]);
+                        var kk: f64 = 0;
+                        var qk: f64 = 0;
+                        for (0..Dk) |d| {
+                            kk += Kt[i * Dk + d] * Kt[j * Dk + d];
+                            qk += Qt[i * Dk + d] * Kt[j * Dk + d];
+                        }
+                        A[i * C + j] = if (j < i) beta[i] * kk * dij else 0;
+                        P[i * C + j] = qk * dij;
+                    }
+                }
+
+                for (0..C) |i| {
+                    const gi = @exp(lg[i]);
+                    const dend = @exp(lg[C - 1] - lg[i]);
+                    for (0..Dk) |d| {
+                        Kg[i * Dk + d] = beta[i] * gi * Kt[i * Dk + d];
+                        Kd[i * Dk + d] = dend * Kt[i * Dk + d];
+                        Qg[i * Dk + d] = gi * Qt[i * Dk + d];
+                    }
+                    for (0..Dv) |d| Vb[i * Dv + d] = beta[i] * Vt[i * Dv + d];
+                }
+
+                for (0..C) |i| {
+                    for (0..Dk) |d| W[i * Dk + d] = Kg[i * Dk + d];
+                    for (0..Dv) |d| U[i * Dv + d] = Vb[i * Dv + d];
+                    for (0..i) |j| {
+                        const a = A[i * C + j];
+                        for (0..Dk) |d| W[i * Dk + d] -= a * W[j * Dk + d];
+                        for (0..Dv) |d| U[i * Dv + d] -= a * U[j * Dv + d];
+                    }
+                }
+
+                for (0..C) |i| {
+                    for (0..Dk) |d| {
+                        var acc: f64 = 0;
+                        for (0..C) |j| acc += P[i * C + j] * W[j * Dk + d];
+                        Qeff[i * Dk + d] = Qg[i * Dk + d] - acc;
+                    }
+                    for (0..Dv) |d| {
+                        var acc: f64 = 0;
+                        for (0..C) |j| acc += P[i * C + j] * U[j * Dv + d];
+                        Yloc[i * Dv + d] = acc;
+                    }
+                }
+
+                for (0..C) |i| {
+                    for (0..Dv) |dvi| {
+                        var ws: f64 = 0;
+                        var qs: f64 = 0;
+                        for (0..Dk) |dki| {
+                            ws += W[i * Dk + dki] * S[dvi * Dk + dki];
+                            qs += Qeff[i * Dk + dki] * S[dvi * Dk + dki];
+                        }
+                        Vnew[i * Dv + dvi] = U[i * Dv + dvi] - ws;
+                        if (i < tt) y[((b * T + t0 + i) * Hv + hv) * Dv + dvi] = @floatCast(Yloc[i * Dv + dvi] + qs);
+                    }
+                }
+
+                for (0..Dv) |dvi| {
+                    for (0..Dk) |dki| {
+                        var acc: f64 = 0;
+                        for (0..C) |i| acc += Vnew[i * Dv + dvi] * Kd[i * Dk + dki];
+                        S[dvi * Dk + dki] = Gc * S[dvi * Dk + dki] + acc;
+                    }
+                }
+            }
+            for (0..Dv) |dvi| {
+                for (0..Dk) |dki| st_out[((b * Hv + hv) * Dv + dvi) * Dk + dki] = @floatCast(S[dvi * Dk + dki]);
+            }
+        }
+    }
+    return .{ .y = y, .state = st_out };
+}
+
 const GdnRunOut = struct { y: mlx.mlx_array, state: mlx.mlx_array };
 
 /// Run the GDN recurrence via the stock single-state kernel (blocked=false)
@@ -39313,6 +39492,47 @@ test "GDN blocked-seq kernel: chunk-boundary state continuity (split run == full
     const part2_y = try evalToF32(al, part2.y, n2, s);
     defer al.free(part2_y);
     try testing.expect(maxAbsDiff(tail_f, part2_y) < tol);
+}
+
+test "GDN chunkwise math: f64 chunk decomposition == f64 recurrence (partial tail, GQA, B=2, g~1)" {
+    const al = testing.allocator;
+    const cases = [_]struct { B: usize, T: usize, Hk: usize, Hv: usize, Dv: usize, C: usize }{
+        .{ .B = 1, .T = 64, .Hk = 1, .Hv = 1, .Dv = 32, .C = 64 }, // exactly one chunk
+        .{ .B = 2, .T = 130, .Hk = 2, .Hv = 4, .Dv = 64, .C = 64 }, // 3 chunks, tail of 2, GQA, batch
+        .{ .B = 1, .T = 100, .Hk = 1, .Hv = 2, .Dv = 32, .C = 32 }, // C=32 variant, tail of 4
+    };
+    for (cases) |cs| {
+        const Dk: usize = 128;
+        var prng = std.Random.DefaultPrng.init(0xC4B1);
+        const rnd = prng.random();
+        const qd = try al.alloc(f32, cs.B * cs.T * cs.Hk * Dk);
+        defer al.free(qd);
+        const kd = try al.alloc(f32, cs.B * cs.T * cs.Hk * Dk);
+        defer al.free(kd);
+        const vd = try al.alloc(f32, cs.B * cs.T * cs.Hv * cs.Dv);
+        defer al.free(vd);
+        const gd = try al.alloc(f32, cs.B * cs.T * cs.Hv);
+        defer al.free(gd);
+        const bd = try al.alloc(f32, cs.B * cs.T * cs.Hv);
+        defer al.free(bd);
+        const sd = try al.alloc(f32, cs.B * cs.Hv * cs.Dv * Dk);
+        defer al.free(sd);
+        for (qd) |*x| x.* = bf16Trunc(rnd.float(f32) - 0.5);
+        for (kd) |*x| x.* = bf16Trunc(rnd.float(f32) - 0.5);
+        for (vd) |*x| x.* = bf16Trunc(rnd.float(f32) - 0.5);
+        for (gd) |*x| x.* = bf16Trunc(0.97 + 0.03 * rnd.float(f32));
+        for (bd) |*x| x.* = bf16Trunc(rnd.float(f32));
+        for (sd) |*x| x.* = bf16Trunc(rnd.float(f32) - 0.5);
+        const ref = try gdnHostRef(al, qd, kd, vd, gd, bd, sd, cs.B, cs.T, cs.Hk, cs.Hv, Dk, cs.Dv);
+        defer al.free(ref.y);
+        defer al.free(ref.state);
+        const chunk = try gdnChunkRef(al, qd, kd, vd, gd, bd, sd, cs.B, cs.T, cs.Hk, cs.Hv, Dk, cs.Dv, cs.C);
+        defer al.free(chunk.y);
+        defer al.free(chunk.state);
+        // f64 vs f64: only summation order differs; 1e-4 is ~10^6x the f64 eps at these magnitudes.
+        try testing.expect(maxAbsDiff(chunk.y, ref.y) < 1e-4);
+        try testing.expect(maxAbsDiff(chunk.state, ref.state) < 1e-4);
+    }
 }
 
 test "gdnBlockTFor: the block size follows the INPUT WIDTH, not a bf16 assumption" {
