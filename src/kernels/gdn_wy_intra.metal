@@ -7,6 +7,7 @@ constexpr int SLD = 36; // staged K/Q row pitch (32 columns + padding)
 
 static_assert(Dk % 32 == 0, "gdn wy intra stages Dk in 32-column steps");
 static_assert(Dv % 8 == 0, "gdn wy intra writes Yloc in 8-column fragments");
+static_assert(Dk + Dv <= 256, "gdn wy intra solves one column per thread");
 
 const int tid = int(thread_index_in_threadgroup);
 const ushort sg = ushort(simdgroup_index_in_threadgroup);
