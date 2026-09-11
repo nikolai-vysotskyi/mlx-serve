@@ -440,6 +440,214 @@ fn getGdnKernelBlocked(tb: u32) !mlx.mlx_fast_metal_kernel {
     return error.UnsupportedGdnBlockT;
 }
 
+// ── GatedDeltaNet chunkwise (WY / UT-transform) PREFILL kernels ──
+// Same recurrence, reassociated: a chunk of C = 64 tokens is folded into the
+// state with one rank-C update instead of C dependent scalar steps, which
+// turns the T-long serial dependency into (T/C) steps of small MMAs plus a
+// fully parallel per-chunk stage. `msv_gdn_wy_intra_c64` computes everything
+// that does NOT depend on the incoming state (W, U, Kd, Qeff, Yloc, Gc — see
+// the plan's Math contract) with one threadgroup per (chunk, hv, b);
+// `msv_gdn_wy_state_c64` walks the chunks in order with the state slice in
+// simdgroup-matrix registers. Opt-in (MLX_SERVE_GDN_WY=1); anything
+// ineligible falls back to the blocked kernel.
+
+/// Test seam: forces the chunkwise route on/off without the environment.
+pub var gdn_wy_override: ?bool = null;
+var gdn_wy_env_cached: ?bool = null;
+var gdn_wy_logged: bool = false;
+
+pub fn gdnWyEnabled() bool {
+    if (gdn_wy_override) |v| return v;
+    if (gdn_wy_env_cached) |v| return v;
+    const raw = std.c.getenv("MLX_SERVE_GDN_WY");
+    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
+    gdn_wy_env_cached = enabled;
+    return enabled;
+}
+
+/// Chunk width, compile-time in the Metal sources (the kernel names carry it,
+/// so a second width means a second kernel object, never a re-specialization).
+pub const GDN_WY_C: u32 = 64;
+
+/// Prefill-width floor: below this the chunk stage's extra dispatch plus the
+/// five intermediate tiles cost more than the recurrence they remove.
+pub const GDN_WY_MIN_T: c_int = 256;
+
+/// Pure routing predicate: geometry + width gate for the chunkwise kernels.
+pub fn gdnWyEligible(seq_len: c_int, dk: c_int, dv: c_int, num_k_heads: c_int, num_v_heads: c_int) bool {
+    if (seq_len < GDN_WY_MIN_T) return false;
+    if (dk != 128) return false;
+    if (dv < 32 or @rem(dv, 32) != 0) return false;
+    if (num_k_heads <= 0 or @rem(num_v_heads, num_k_heads) != 0) return false;
+    return true;
+}
+
+/// Diagnosis seam: float32 intermediate tiles separate a formula bug (still
+/// wrong) from bf16 tile rounding (goes away). Never on in production.
+pub var gdn_wy_mid_f32_override: bool = false;
+
+var gdn_wy_intra_cached: ?mlx.mlx_fast_metal_kernel = null;
+var gdn_wy_state_cached: ?mlx.mlx_fast_metal_kernel = null;
+
+fn getGdnKernelWyIntra() !mlx.mlx_fast_metal_kernel {
+    if (gdn_wy_intra_cached) |k| return k;
+    const input_names = [_][*:0]const u8{ "q", "k", "v", "g", "beta", "T" };
+    const output_names = [_][*:0]const u8{ "W", "U", "Kd", "Qeff", "Yloc", "Gc" };
+    const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+    defer _ = mlx.mlx_vector_string_free(in_vec);
+    const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+    defer _ = mlx.mlx_vector_string_free(out_vec);
+    const kernel = mlx.mlx_fast_metal_kernel_new(
+        std.fmt.comptimePrint("msv_gdn_wy_intra_c{d}", .{GDN_WY_C}),
+        in_vec,
+        out_vec,
+        @embedFile("kernels/gdn_wy_intra.metal"),
+        @embedFile("kernels/gdn_wy_header.metal"),
+        true,
+        false,
+    );
+    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+    gdn_wy_intra_cached = kernel;
+    return kernel;
+}
+
+fn getGdnKernelWyState() !mlx.mlx_fast_metal_kernel {
+    if (gdn_wy_state_cached) |k| return k;
+    const input_names = [_][*:0]const u8{ "W", "U", "Kd", "Qeff", "Yloc", "Gc", "state_in", "T" };
+    const output_names = [_][*:0]const u8{ "y", "state_out" };
+    const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+    defer _ = mlx.mlx_vector_string_free(in_vec);
+    const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+    defer _ = mlx.mlx_vector_string_free(out_vec);
+    const kernel = mlx.mlx_fast_metal_kernel_new(
+        std.fmt.comptimePrint("msv_gdn_wy_state_c{d}", .{GDN_WY_C}),
+        in_vec,
+        out_vec,
+        @embedFile("kernels/gdn_wy_state.metal"),
+        @embedFile("kernels/gdn_wy_header.metal"),
+        true,
+        false,
+    );
+    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+    gdn_wy_state_cached = kernel;
+    return kernel;
+}
+
+/// The five chunk-local tiles plus the per-chunk decay, laid out
+/// [B, Hv, NC, C, D] (Gc: [B, Hv, NC]) — the intra kernel's outputs and the
+/// state kernel's inputs. Caller-owned.
+const GdnWyMid = struct {
+    w: mlx.mlx_array,
+    u: mlx.mlx_array,
+    kd: mlx.mlx_array,
+    qeff: mlx.mlx_array,
+    yloc: mlx.mlx_array,
+    gc: mlx.mlx_array,
+
+    fn deinit(self: *const GdnWyMid) void {
+        _ = mlx.mlx_array_free(self.w);
+        _ = mlx.mlx_array_free(self.u);
+        _ = mlx.mlx_array_free(self.kd);
+        _ = mlx.mlx_array_free(self.qeff);
+        _ = mlx.mlx_array_free(self.yloc);
+        _ = mlx.mlx_array_free(self.gc);
+    }
+};
+
+fn gdnWyIntra(s: mlx.mlx_stream, q: mlx.mlx_array, k: mlx.mlx_array, v: mlx.mlx_array, g: mlx.mlx_array, beta: mlx.mlx_array, B: c_int, T: c_int, Hk: c_int, Hv: c_int, Dk: c_int, Dv: c_int) !GdnWyMid {
+    const cw: c_int = @intCast(GDN_WY_C);
+    const nc = @divFloor(T + cw - 1, cw);
+    const mid_dtype: mlx.mlx_dtype = if (gdn_wy_mid_f32_override) .float32 else .bfloat16;
+    const k_shape = [_]c_int{ B, Hv, nc, cw, Dk };
+    const v_shape = [_]c_int{ B, Hv, nc, cw, Dv };
+    const g_shape = [_]c_int{ B, Hv, nc };
+
+    const config = mlx.mlx_fast_metal_kernel_config_new();
+    defer _ = mlx.mlx_fast_metal_kernel_config_free(config);
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &k_shape, 5, mid_dtype));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &v_shape, 5, mid_dtype));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &k_shape, 5, mid_dtype));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &k_shape, 5, mid_dtype));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &v_shape, 5, mid_dtype));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &g_shape, 3, .float32));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(config, 256 * nc, Hv, B));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(config, 256, 1, 1));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(config, "InT", mlx.mlx_array_dtype(q)));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(config, "MidT", mid_dtype));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "Dk", Dk));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "Dv", Dv));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "Hk", Hk));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "Hv", Hv));
+
+    const T_scalar = mlx.mlx_array_new_int(T);
+    defer _ = mlx.mlx_array_free(T_scalar);
+    const inputs_arr = [_]mlx.mlx_array{ q, k, v, g, beta, T_scalar };
+    const inputs_vec = mlx.mlx_vector_array_new_data(&inputs_arr, inputs_arr.len);
+    defer _ = mlx.mlx_vector_array_free(inputs_vec);
+    var outputs_vec = mlx.mlx_vector_array_new();
+    defer _ = mlx.mlx_vector_array_free(outputs_vec);
+    try mlx.check(mlx.mlx_fast_metal_kernel_apply(&outputs_vec, try getGdnKernelWyIntra(), inputs_vec, config, s));
+    if (mlx.mlx_vector_array_size(outputs_vec) != 6) return error.MetalKernelBadOutputCount;
+    var out: GdnWyMid = .{
+        .w = mlx.mlx_array_new(),
+        .u = mlx.mlx_array_new(),
+        .kd = mlx.mlx_array_new(),
+        .qeff = mlx.mlx_array_new(),
+        .yloc = mlx.mlx_array_new(),
+        .gc = mlx.mlx_array_new(),
+    };
+    errdefer out.deinit();
+    try mlx.check(mlx.mlx_vector_array_get(&out.w, outputs_vec, 0));
+    try mlx.check(mlx.mlx_vector_array_get(&out.u, outputs_vec, 1));
+    try mlx.check(mlx.mlx_vector_array_get(&out.kd, outputs_vec, 2));
+    try mlx.check(mlx.mlx_vector_array_get(&out.qeff, outputs_vec, 3));
+    try mlx.check(mlx.mlx_vector_array_get(&out.yloc, outputs_vec, 4));
+    try mlx.check(mlx.mlx_vector_array_get(&out.gc, outputs_vec, 5));
+    return out;
+}
+
+fn gdnWyState(s: mlx.mlx_stream, mid: GdnWyMid, state_in: mlx.mlx_array, B: c_int, T: c_int, Hk: c_int, Hv: c_int, Dk: c_int, Dv: c_int) !GdnRunOut {
+    const y_shape = [_]c_int{ B, T, Hv, Dv };
+    const so_shape = [_]c_int{ B, Hv, Dv, Dk };
+    const config = mlx.mlx_fast_metal_kernel_config_new();
+    defer _ = mlx.mlx_fast_metal_kernel_config_free(config);
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &y_shape, 4, .bfloat16));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &so_shape, 4, .bfloat16));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(config, 256 * @divExact(Dv, 32), Hv, B));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(config, 256, 1, 1));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(config, "MidT", mlx.mlx_array_dtype(mid.w)));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(config, "StT", mlx.mlx_array_dtype(state_in)));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(config, "OutT", .bfloat16));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "Dk", Dk));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "Dv", Dv));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "Hk", Hk));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "Hv", Hv));
+
+    const T_scalar = mlx.mlx_array_new_int(T);
+    defer _ = mlx.mlx_array_free(T_scalar);
+    const inputs_arr = [_]mlx.mlx_array{ mid.w, mid.u, mid.kd, mid.qeff, mid.yloc, mid.gc, state_in, T_scalar };
+    const inputs_vec = mlx.mlx_vector_array_new_data(&inputs_arr, inputs_arr.len);
+    defer _ = mlx.mlx_vector_array_free(inputs_vec);
+    var outputs_vec = mlx.mlx_vector_array_new();
+    defer _ = mlx.mlx_vector_array_free(outputs_vec);
+    try mlx.check(mlx.mlx_fast_metal_kernel_apply(&outputs_vec, try getGdnKernelWyState(), inputs_vec, config, s));
+    if (mlx.mlx_vector_array_size(outputs_vec) != 2) return error.MetalKernelBadOutputCount;
+    var yo = mlx.mlx_array_new();
+    var so = mlx.mlx_array_new();
+    try mlx.check(mlx.mlx_vector_array_get(&yo, outputs_vec, 0));
+    try mlx.check(mlx.mlx_vector_array_get(&so, outputs_vec, 1));
+    return .{ .y = yo, .state = so };
+}
+
+/// One chunkwise GDN prefill: the chunk-local stage, then the sequential
+/// inter-chunk stage. Both configs are built here and freed with the call;
+/// only the two kernel objects are cached.
+fn gdnWyApply(s: mlx.mlx_stream, q: mlx.mlx_array, k: mlx.mlx_array, v: mlx.mlx_array, g: mlx.mlx_array, beta: mlx.mlx_array, state_in: mlx.mlx_array, B: c_int, T: c_int, Hk: c_int, Hv: c_int, Dk: c_int, Dv: c_int) !GdnRunOut {
+    const mid = try gdnWyIntra(s, q, k, v, g, beta, B, T, Hk, Hv, Dk, Dv);
+    defer mid.deinit();
+    return gdnWyState(s, mid, state_in, B, T, Hk, Hv, Dk, Dv);
+}
+
 // ── Verify-width split-K quantized matmul (spec-decode fast path) ──
 //
 // Stock MLX qmm is tuned for M=1 decode (qmv) and large-M prefill (steel);
@@ -22492,7 +22700,11 @@ pub const Transformer = struct {
             // The blocked kernel reads a PER-HEAD gate; a per-channel (KDA)
             // gate is a different indexing contract, so it declines outright
             // rather than silently reading the wrong element.
-            const blocked_tb: ?u32 = if (!vector_gate and gdnBlockedEnabled() and gdnBlockedEligible(seq_len, dk, dv, num_k_heads, num_v_heads))
+            // Chunkwise (WY) route first when it is opted in and the geometry
+            // fits: same interface, same fallback ladder underneath it.
+            const use_wy = !vector_gate and gdnWyEnabled() and
+                gdnWyEligible(seq_len, dk, dv, num_k_heads, num_v_heads);
+            const blocked_tb: ?u32 = if (!use_wy and !vector_gate and gdnBlockedEnabled() and gdnBlockedEligible(seq_len, dk, dv, num_k_heads, num_v_heads))
                 gdnBlockTFor(gdnBlockT(), dk, gdn_in_itemsize)
             else
                 null;
@@ -22517,13 +22729,23 @@ pub const Transformer = struct {
             const inputs_vec = mlx.mlx_vector_array_new_data(&inputs_arr, inputs_arr.len);
             defer _ = mlx.mlx_vector_array_free(inputs_vec);
 
-            const gdn_kernel = if (blocked_tb) |tb| try getGdnKernelBlocked(tb) else try getGdnKernel(vector_gate);
             var outputs_vec = mlx.mlx_vector_array_new();
             defer _ = mlx.mlx_vector_array_free(outputs_vec);
             if (qwen4Standin().gdn_recur) {
                 _ = mlx.mlx_array_free(y_bthd);
                 y_bthd = try standinRef(v_heads);
+            } else if (use_wy) {
+                const wy = try gdnWyApply(self.s, q_scaled, k_scaled, v_heads, g, beta, ssm.ssm_state, batch, seq_len, num_k_heads, num_v_heads, dk, dv);
+                _ = mlx.mlx_array_free(y_bthd);
+                y_bthd = wy.y;
+                _ = mlx.mlx_array_free(ssm.ssm_state);
+                ssm.ssm_state = wy.state;
+                if (!gdn_wy_logged) {
+                    gdn_wy_logged = true;
+                    log.info("[gdn-wy] engaged: S={d} C={d} B={d} Hv={d}\n", .{ seq_len, GDN_WY_C, batch, num_v_heads });
+                }
             } else {
+                const gdn_kernel = if (blocked_tb) |tb| try getGdnKernelBlocked(tb) else try getGdnKernel(vector_gate);
                 try mlx.check(mlx.mlx_fast_metal_kernel_apply(&outputs_vec, gdn_kernel, inputs_vec, config, self.s));
                 if (mlx.mlx_vector_array_size(outputs_vec) != 2) return error.MetalKernelBadOutputCount;
                 try mlx.check(mlx.mlx_vector_array_get(&y_bthd, outputs_vec, 0));
@@ -39191,6 +39413,11 @@ fn gdnRunYState(blocked: bool, tb_requested: u32, q: mlx.mlx_array, k: mlx.mlx_a
     return .{ .y = yo, .state = so };
 }
 
+/// Run the same recurrence through the chunkwise (WY) prefill kernels.
+fn gdnRunWy(q: mlx.mlx_array, k: mlx.mlx_array, v: mlx.mlx_array, g: mlx.mlx_array, beta: mlx.mlx_array, state_in: mlx.mlx_array, B: c_int, T: c_int, Hk: c_int, Hv: c_int, Dk: c_int, Dv: c_int, s: mlx.mlx_stream) !GdnRunOut {
+    return gdnWyApply(s, q, k, v, g, beta, state_in, B, T, Hk, Hv, Dk, Dv);
+}
+
 /// Eval an mlx array as f32 and copy its data into a fresh slice.
 fn evalToF32(al: std.mem.Allocator, arr: mlx.mlx_array, n: usize, s: mlx.mlx_stream) ![]f32 {
     var f = mlx.mlx_array_new();
@@ -39532,6 +39759,294 @@ test "GDN chunkwise math: f64 chunk decomposition == f64 recurrence (partial tai
         // f64 vs f64: only summation order differs; 1e-4 is ~10^6x the f64 eps at these magnitudes.
         try testing.expect(maxAbsDiff(chunk.y, ref.y) < 1e-4);
         try testing.expect(maxAbsDiff(chunk.state, ref.state) < 1e-4);
+    }
+}
+
+/// Test inputs for the WY cases: bf16-truncated host buffers (so the f64
+/// reference and the kernels consume IDENTICAL values) plus the matching mlx
+/// arrays at the live dtype signature — `g` and the state are always bf16,
+/// q/k/v/beta follow the activation width. Decay sits in [0.97, 1.0): the
+/// regime where the inter-chunk term dominates and a chunkwise bug that a
+/// fast-decaying case would bury under the decay shows up.
+const GdnWyInputs = struct {
+    qd: []f32,
+    kd: []f32,
+    vd: []f32,
+    gd: []f32,
+    bd: []f32,
+    sd: []f32,
+    q: mlx.mlx_array,
+    k: mlx.mlx_array,
+    v: mlx.mlx_array,
+    g: mlx.mlx_array,
+    beta: mlx.mlx_array,
+    st: mlx.mlx_array,
+
+    fn deinit(self: *const GdnWyInputs, al: std.mem.Allocator) void {
+        al.free(self.qd);
+        al.free(self.kd);
+        al.free(self.vd);
+        al.free(self.gd);
+        al.free(self.bd);
+        al.free(self.sd);
+        _ = mlx.mlx_array_free(self.q);
+        _ = mlx.mlx_array_free(self.k);
+        _ = mlx.mlx_array_free(self.v);
+        _ = mlx.mlx_array_free(self.g);
+        _ = mlx.mlx_array_free(self.beta);
+        _ = mlx.mlx_array_free(self.st);
+    }
+};
+
+fn gdnWyInputs(al: std.mem.Allocator, seed: u64, B: c_int, T: c_int, Hk: c_int, Hv: c_int, Dk: c_int, Dv: c_int, in_dtype: mlx.mlx_dtype, s: mlx.mlx_stream) !GdnWyInputs {
+    const qn: usize = @intCast(B * T * Hk * Dk);
+    const vn: usize = @intCast(B * T * Hv * Dv);
+    const gn: usize = @intCast(B * T * Hv);
+    const sn: usize = @intCast(B * Hv * Dv * Dk);
+    var prng = std.Random.DefaultPrng.init(seed);
+    const rnd = prng.random();
+    const qd = try al.alloc(f32, qn);
+    errdefer al.free(qd);
+    const kd = try al.alloc(f32, qn);
+    errdefer al.free(kd);
+    const vd = try al.alloc(f32, vn);
+    errdefer al.free(vd);
+    const gd = try al.alloc(f32, gn);
+    errdefer al.free(gd);
+    const bd = try al.alloc(f32, gn);
+    errdefer al.free(bd);
+    const sd = try al.alloc(f32, sn);
+    errdefer al.free(sd);
+    for (qd) |*x| x.* = rnd.float(f32) - 0.5;
+    for (kd) |*x| x.* = rnd.float(f32) - 0.5;
+    for (vd) |*x| x.* = bf16Trunc(rnd.float(f32) - 0.5);
+    for (gd) |*x| x.* = bf16Trunc(0.97 + 0.03 * rnd.float(f32));
+    for (bd) |*x| x.* = bf16Trunc(rnd.float(f32));
+    for (sd) |*x| x.* = bf16Trunc(rnd.float(f32) - 0.5);
+    // Production feeds the kernel rms_norm(q|k) rescaled to unit L2 rows. At
+    // g ~ 1 that is not cosmetic: with |k| free the delta update
+    // (I - beta·k·k^T) has eigenvalue 1 - beta·|k|^2 well outside [-1, 1] and
+    // the recurrence diverges past a few hundred tokens, which would make the
+    // long-T cases compare inf against inf.
+    const rowk: usize = @intCast(Dk);
+    for (0..qn / rowk) |r| {
+        var nq: f32 = 0;
+        var nk: f32 = 0;
+        for (qd[r * rowk ..][0..rowk], kd[r * rowk ..][0..rowk]) |a, c| {
+            nq += a * a;
+            nk += c * c;
+        }
+        nq = @sqrt(nq);
+        nk = @sqrt(nk);
+        for (qd[r * rowk ..][0..rowk], kd[r * rowk ..][0..rowk]) |*a, *c| {
+            a.* = bf16Trunc(a.* / nq);
+            c.* = bf16Trunc(c.* / nk);
+        }
+    }
+
+    const qsh = [_]c_int{ B, T, Hk, Dk };
+    const vsh = [_]c_int{ B, T, Hv, Dv };
+    const gsh = [_]c_int{ B, T, Hv };
+    const ssh = [_]c_int{ B, Hv, Dv, Dk };
+    const q32 = mlx.mlx_array_new_data(qd.ptr, &qsh, 4, .float32);
+    defer _ = mlx.mlx_array_free(q32);
+    const k32 = mlx.mlx_array_new_data(kd.ptr, &qsh, 4, .float32);
+    defer _ = mlx.mlx_array_free(k32);
+    const v32 = mlx.mlx_array_new_data(vd.ptr, &vsh, 4, .float32);
+    defer _ = mlx.mlx_array_free(v32);
+    const g32 = mlx.mlx_array_new_data(gd.ptr, &gsh, 3, .float32);
+    defer _ = mlx.mlx_array_free(g32);
+    const b32 = mlx.mlx_array_new_data(bd.ptr, &gsh, 3, .float32);
+    defer _ = mlx.mlx_array_free(b32);
+    const st32 = mlx.mlx_array_new_data(sd.ptr, &ssh, 4, .float32);
+    defer _ = mlx.mlx_array_free(st32);
+
+    var out: GdnWyInputs = .{
+        .qd = qd,
+        .kd = kd,
+        .vd = vd,
+        .gd = gd,
+        .bd = bd,
+        .sd = sd,
+        .q = mlx.mlx_array_new(),
+        .k = mlx.mlx_array_new(),
+        .v = mlx.mlx_array_new(),
+        .g = mlx.mlx_array_new(),
+        .beta = mlx.mlx_array_new(),
+        .st = mlx.mlx_array_new(),
+    };
+    try mlx.check(mlx.mlx_astype(&out.q, q32, in_dtype, s));
+    try mlx.check(mlx.mlx_astype(&out.k, k32, in_dtype, s));
+    try mlx.check(mlx.mlx_astype(&out.v, v32, in_dtype, s));
+    try mlx.check(mlx.mlx_astype(&out.g, g32, .bfloat16, s));
+    try mlx.check(mlx.mlx_astype(&out.beta, b32, in_dtype, s));
+    try mlx.check(mlx.mlx_astype(&out.st, st32, .bfloat16, s));
+    return out;
+}
+
+/// One geometry through host ref + stock + WY: the chunkwise kernels must be
+/// no less accurate than the per-token kernel they replace.
+fn gdnWyParityCase(case: GdnCase, s: mlx.mlx_stream) !void {
+    const al = testing.allocator;
+    const B = case.B;
+    const T = case.T;
+    const Hk = case.Hk;
+    const Hv = case.Hv;
+    const Dk: c_int = 128;
+    const Dv = case.Dv;
+    const vn: usize = @intCast(B * T * Hv * Dv);
+    const sn: usize = @intCast(B * Hv * Dv * Dk);
+
+    const in = try gdnWyInputs(al, 0xB10C5ED, B, T, Hk, Hv, Dk, Dv, case.in_dtype, s);
+    defer in.deinit(al);
+
+    const ref = try gdnHostRef(al, in.qd, in.kd, in.vd, in.gd, in.bd, in.sd, @intCast(B), @intCast(T), @intCast(Hk), @intCast(Hv), @intCast(Dk), @intCast(Dv));
+    defer al.free(ref.y);
+    defer al.free(ref.state);
+
+    const stock = try gdnRunYState(false, case.tb, in.q, in.k, in.v, in.g, in.beta, in.st, B, T, Hk, Hv, Dk, Dv, s);
+    defer _ = mlx.mlx_array_free(stock.y);
+    defer _ = mlx.mlx_array_free(stock.state);
+    const wy = try gdnRunWy(in.q, in.k, in.v, in.g, in.beta, in.st, B, T, Hk, Hv, Dk, Dv, s);
+    defer _ = mlx.mlx_array_free(wy.y);
+    defer _ = mlx.mlx_array_free(wy.state);
+
+    const stock_y = try evalToF32(al, stock.y, vn, s);
+    defer al.free(stock_y);
+    const stock_st = try evalToF32(al, stock.state, sn, s);
+    defer al.free(stock_st);
+    const wy_y = try evalToF32(al, wy.y, vn, s);
+    defer al.free(wy_y);
+    const wy_st = try evalToF32(al, wy.state, sn, s);
+    defer al.free(wy_st);
+
+    const stock_y_err = maxAbsDiff(stock_y, ref.y);
+    const stock_st_err = maxAbsDiff(stock_st, ref.state);
+    const wy_y_err = maxAbsDiff(wy_y, ref.y);
+    const wy_st_err = maxAbsDiff(wy_st, ref.state);
+    if (wy_y_err > 1.5 * stock_y_err + 0.02 or wy_st_err > 1.5 * stock_st_err + 0.02) {
+        std.debug.print(
+            "GDN WY parity FAIL (B={d} T={d} Hk={d} Hv={d} Dv={d}): y {d:.5} vs stock {d:.5}, state {d:.5} vs stock {d:.5}\n",
+            .{ case.B, case.T, case.Hk, case.Hv, case.Dv, wy_y_err, stock_y_err, wy_st_err, stock_st_err },
+        );
+        return error.GdnWyParityFailed;
+    }
+}
+
+test "GDN WY kernel: no worse than stock vs f64 ground truth (T/GQA/B/dtype sweep, g~1, partial tail)" {
+    const s = mlx.gpuStream();
+    const cases = [_]GdnCase{
+        .{ .B = 1, .T = 64, .Hk = 2, .Hv = 4, .Dv = 128, .tb = 32 }, // one full chunk
+        .{ .B = 2, .T = 130, .Hk = 1, .Hv = 2, .Dv = 64, .tb = 32 }, // batch, GQA, tail of 2
+        .{ .B = 1, .T = 130, .Hk = 2, .Hv = 4, .Dv = 128, .tb = 32, .in_dtype = .float32 },
+        .{ .B = 1, .T = 130, .Hk = 2, .Hv = 4, .Dv = 64, .tb = 32, .in_dtype = .float16 },
+        .{ .B = 1, .T = 4096, .Hk = 2, .Hv = 4, .Dv = 128, .tb = 32 }, // 64 chunks: inter-chunk term at g~1
+        .{ .B = 1, .T = 8192, .Hk = 1, .Hv = 2, .Dv = 128, .tb = 32 }, // production chunk width
+    };
+    for (cases) |case| try gdnWyParityCase(case, s);
+}
+
+test "GDN WY kernel: chunk-boundary state continuity (split run vs full run, both vs f64)" {
+    const s = mlx.gpuStream();
+    const al = testing.allocator;
+    const B: c_int = 1;
+    const T: c_int = 300;
+    const T1: c_int = 130; // neither T nor T1 is a multiple of C: both halves end on a partial chunk
+    const Hk: c_int = 2;
+    const Hv: c_int = 4;
+    const Dk: c_int = 128;
+    const Dv: c_int = 128;
+    const vn: usize = @intCast(B * T * Hv * Dv);
+    const vn1: usize = @intCast(B * T1 * Hv * Dv);
+    const vn2: usize = vn - vn1;
+    const sn: usize = @intCast(B * Hv * Dv * Dk);
+
+    const in = try gdnWyInputs(al, 0x5EC0DD, B, T, Hk, Hv, Dk, Dv, .bfloat16, s);
+    defer in.deinit(al);
+
+    const ref = try gdnHostRef(al, in.qd, in.kd, in.vd, in.gd, in.bd, in.sd, @intCast(B), @intCast(T), @intCast(Hk), @intCast(Hv), @intCast(Dk), @intCast(Dv));
+    defer al.free(ref.y);
+    defer al.free(ref.state);
+
+    const strides4 = [_]c_int{ 1, 1, 1, 1 };
+    const strides3 = [_]c_int{ 1, 1, 1 };
+    var half: [10]mlx.mlx_array = @splat(mlx.mlx_array_new());
+    for (&half) |*a| a.* = mlx.mlx_array_new();
+    defer for (half) |a| {
+        _ = mlx.mlx_array_free(a);
+    };
+    try mlx.check(mlx.mlx_slice(&half[0], in.q, &[_]c_int{ 0, 0, 0, 0 }, 4, &[_]c_int{ B, T1, Hk, Dk }, 4, &strides4, 4, s));
+    try mlx.check(mlx.mlx_slice(&half[1], in.k, &[_]c_int{ 0, 0, 0, 0 }, 4, &[_]c_int{ B, T1, Hk, Dk }, 4, &strides4, 4, s));
+    try mlx.check(mlx.mlx_slice(&half[2], in.v, &[_]c_int{ 0, 0, 0, 0 }, 4, &[_]c_int{ B, T1, Hv, Dv }, 4, &strides4, 4, s));
+    try mlx.check(mlx.mlx_slice(&half[3], in.g, &[_]c_int{ 0, 0, 0 }, 3, &[_]c_int{ B, T1, Hv }, 3, &strides3, 3, s));
+    try mlx.check(mlx.mlx_slice(&half[4], in.beta, &[_]c_int{ 0, 0, 0 }, 3, &[_]c_int{ B, T1, Hv }, 3, &strides3, 3, s));
+    try mlx.check(mlx.mlx_slice(&half[5], in.q, &[_]c_int{ 0, T1, 0, 0 }, 4, &[_]c_int{ B, T, Hk, Dk }, 4, &strides4, 4, s));
+    try mlx.check(mlx.mlx_slice(&half[6], in.k, &[_]c_int{ 0, T1, 0, 0 }, 4, &[_]c_int{ B, T, Hk, Dk }, 4, &strides4, 4, s));
+    try mlx.check(mlx.mlx_slice(&half[7], in.v, &[_]c_int{ 0, T1, 0, 0 }, 4, &[_]c_int{ B, T, Hv, Dv }, 4, &strides4, 4, s));
+    try mlx.check(mlx.mlx_slice(&half[8], in.g, &[_]c_int{ 0, T1, 0 }, 3, &[_]c_int{ B, T, Hv }, 3, &strides3, 3, s));
+    try mlx.check(mlx.mlx_slice(&half[9], in.beta, &[_]c_int{ 0, T1, 0 }, 3, &[_]c_int{ B, T, Hv }, 3, &strides3, 3, s));
+
+    // Both routes run the SAME split, so the bf16 state injected at the seam
+    // is identical noise for both and the bar stays a kernel-vs-kernel one.
+    const st_p1 = try gdnRunYState(false, 32, half[0], half[1], half[2], half[3], half[4], in.st, B, T1, Hk, Hv, Dk, Dv, s);
+    defer _ = mlx.mlx_array_free(st_p1.y);
+    defer _ = mlx.mlx_array_free(st_p1.state);
+    const st_p2 = try gdnRunYState(false, 32, half[5], half[6], half[7], half[8], half[9], st_p1.state, B, T - T1, Hk, Hv, Dk, Dv, s);
+    defer _ = mlx.mlx_array_free(st_p2.y);
+    defer _ = mlx.mlx_array_free(st_p2.state);
+    const wy_p1 = try gdnRunWy(half[0], half[1], half[2], half[3], half[4], in.st, B, T1, Hk, Hv, Dk, Dv, s);
+    defer _ = mlx.mlx_array_free(wy_p1.y);
+    defer _ = mlx.mlx_array_free(wy_p1.state);
+    const wy_p2 = try gdnRunWy(half[5], half[6], half[7], half[8], half[9], wy_p1.state, B, T - T1, Hk, Hv, Dk, Dv, s);
+    defer _ = mlx.mlx_array_free(wy_p2.y);
+    defer _ = mlx.mlx_array_free(wy_p2.state);
+    const wy_full = try gdnRunWy(in.q, in.k, in.v, in.g, in.beta, in.st, B, T, Hk, Hv, Dk, Dv, s);
+    defer _ = mlx.mlx_array_free(wy_full.y);
+    defer _ = mlx.mlx_array_free(wy_full.state);
+    const st_full = try gdnRunYState(false, 32, in.q, in.k, in.v, in.g, in.beta, in.st, B, T, Hk, Hv, Dk, Dv, s);
+    defer _ = mlx.mlx_array_free(st_full.y);
+    defer _ = mlx.mlx_array_free(st_full.state);
+
+    // y of the split run, concatenated, and the two final states.
+    const sy1 = try evalToF32(al, st_p1.y, vn1, s);
+    defer al.free(sy1);
+    const sy2 = try evalToF32(al, st_p2.y, vn2, s);
+    defer al.free(sy2);
+    const wy1 = try evalToF32(al, wy_p1.y, vn1, s);
+    defer al.free(wy1);
+    const wy2 = try evalToF32(al, wy_p2.y, vn2, s);
+    defer al.free(wy2);
+    const stock_split_y = @max(maxAbsDiff(sy1, ref.y[0..vn1]), maxAbsDiff(sy2, ref.y[vn1..]));
+    const wy_split_y = @max(maxAbsDiff(wy1, ref.y[0..vn1]), maxAbsDiff(wy2, ref.y[vn1..]));
+
+    const ss = try evalToF32(al, st_p2.state, sn, s);
+    defer al.free(ss);
+    const ws = try evalToF32(al, wy_p2.state, sn, s);
+    defer al.free(ws);
+    const stock_split_st = maxAbsDiff(ss, ref.state);
+    const wy_split_st = maxAbsDiff(ws, ref.state);
+
+    const fy_s = try evalToF32(al, st_full.y, vn, s);
+    defer al.free(fy_s);
+    const fy_w = try evalToF32(al, wy_full.y, vn, s);
+    defer al.free(fy_w);
+    const fs_s = try evalToF32(al, st_full.state, sn, s);
+    defer al.free(fs_s);
+    const fs_w = try evalToF32(al, wy_full.state, sn, s);
+    defer al.free(fs_w);
+    const stock_full_y = maxAbsDiff(fy_s, ref.y);
+    const wy_full_y = maxAbsDiff(fy_w, ref.y);
+    const stock_full_st = maxAbsDiff(fs_s, ref.state);
+    const wy_full_st = maxAbsDiff(fs_w, ref.state);
+
+    if (wy_split_y > 1.5 * stock_split_y + 0.02 or wy_split_st > 1.5 * stock_split_st + 0.02 or
+        wy_full_y > 1.5 * stock_full_y + 0.02 or wy_full_st > 1.5 * stock_full_st + 0.02)
+    {
+        std.debug.print(
+            "GDN WY continuity FAIL: split y {d:.5}/{d:.5} state {d:.5}/{d:.5}, full y {d:.5}/{d:.5} state {d:.5}/{d:.5} (wy/stock)\n",
+            .{ wy_split_y, stock_split_y, wy_split_st, stock_split_st, wy_full_y, stock_full_y, wy_full_st, stock_full_st },
+        );
+        return error.GdnWyContinuityFailed;
     }
 }
 
