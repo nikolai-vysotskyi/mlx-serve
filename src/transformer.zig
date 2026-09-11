@@ -3490,6 +3490,150 @@ fn getQsaNaxKernel() !mlx.mlx_fast_metal_kernel {
     return kernel;
 }
 
+// ── Grouped QSA gather: per-group block union (msv_qsa_group_union) ──
+//
+// A pre-pass for the grouped prefill gather: one simdgroup per (query group,
+// batch) merges the G sorted `blocks` rows of the group into one ascending,
+// de-duplicated block list plus a per-query membership bitmask. It runs once
+// per forward — `ctx.qsa_blocks` is shared by every full-attention layer — and
+// reads `blocks` once per group instead of once per gather thread, so the
+// gather then streams `union_blocks + member` instead of the [B,S,KB] map.
+
+/// `blocks` and `member` are [B, NG, G*KB+4] (int32 / uint8) and `len` is
+/// [B, NG] int32, NG = ceil(S/G). Bit `t` of `member[u]` marks query `g*G+t` as
+/// an owner of `blocks[u]`; entries past `len` are INT_MAX with a zero mask.
+/// A staged key row of entry `u` at in-block offset `i` belongs to query `t`
+/// iff the bit is set AND `blocks[u]*RATIO + i <= p_t` — the second clause is
+/// what trims the tail block, so no per-entry row count is stored.
+pub const QsaGroupUnion = struct {
+    blocks: mlx.mlx_array,
+    member: mlx.mlx_array,
+    len: mlx.mlx_array,
+    g: c_int,
+    pub fn deinit(self: *QsaGroupUnion) void {
+        _ = mlx.mlx_array_free(self.blocks);
+        _ = mlx.mlx_array_free(self.member);
+        _ = mlx.mlx_array_free(self.len);
+    }
+};
+
+var qsa_group_env_cached: ?bool = null;
+pub var qsa_group_override: ?bool = null;
+
+/// MLX_SERVE_QSA_GROUP=1 engages the grouped prefill gather; default off.
+pub fn qsaGroupEnabled() bool {
+    if (qsa_group_override) |v| return v;
+    if (qsa_group_env_cached) |v| return v;
+    const v = blk: {
+        const raw = std.c.getenv("MLX_SERVE_QSA_GROUP") orelse break :blk false;
+        break :blk std.mem.eql(u8, std.mem.sliceTo(raw, 0), "1");
+    };
+    qsa_group_env_cached = v;
+    return v;
+}
+
+pub const QSA_GROUP_G_DEFAULT: c_int = 8;
+var qsa_group_g_cached: ?c_int = null;
+pub var qsa_group_g_override: ?c_int = null;
+
+/// Queries per group (MLX_SERVE_QSA_GROUP_G). Only 4 and 8 divide the 16-row
+/// NAX tile into a whole number of queries, so anything else keeps the default.
+pub fn qsaGroupG() c_int {
+    if (qsa_group_g_override) |v| return v;
+    if (qsa_group_g_cached) |v| return v;
+    var v: c_int = QSA_GROUP_G_DEFAULT;
+    if (std.c.getenv("MLX_SERVE_QSA_GROUP_G")) |raw| {
+        const parsed = std.fmt.parseInt(c_int, std.mem.sliceTo(raw, 0), 10) catch v;
+        if (parsed == 4 or parsed == 8) v = parsed;
+    }
+    qsa_group_g_cached = v;
+    return v;
+}
+
+var qsa_group_union_kernel_cached: ?mlx.mlx_fast_metal_kernel = null;
+
+fn getQsaGroupUnionKernel() !mlx.mlx_fast_metal_kernel {
+    if (qsa_group_union_kernel_cached) |kernel| return kernel;
+    const names = [_][*:0]const u8{ "blocks", "kvlen" };
+    const outputs = [_][*:0]const u8{ "union_blocks", "member", "union_len" };
+    const in_vec = mlx.mlx_vector_string_new_data(&names, names.len);
+    defer _ = mlx.mlx_vector_string_free(in_vec);
+    const out_vec = mlx.mlx_vector_string_new_data(&outputs, outputs.len);
+    defer _ = mlx.mlx_vector_string_free(out_vec);
+    const kernel = mlx.mlx_fast_metal_kernel_new(
+        "msv_qsa_group_union",
+        in_vec,
+        out_vec,
+        @embedFile("kernels/qsa_group_union.metal"),
+        "",
+        false,
+        false,
+    );
+    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+    qsa_group_union_kernel_cached = kernel;
+    return kernel;
+}
+
+/// Merge the [B, S, KB] qwen4 block selection into one union per `g`
+/// consecutive queries. `kv_len` is the KV length the selection was made
+/// against, so query `s` sits at causal position `kv_len - S + s`.
+pub fn qsaGroupBuildUnion(
+    s: mlx.mlx_stream,
+    blocks: mlx.mlx_array,
+    kv_len: c_int,
+    ratio: c_int,
+    g: c_int,
+) !QsaGroupUnion {
+    if (!mlx.streamIsGpu(s)) return error.NotGpuStream;
+    if (blocks.ctx == null or mlx.mlx_array_ndim(blocks) != 3) return error.ShapeMismatch;
+    if (mlx.mlx_array_dtype(blocks) != .int32) return error.InvalidDtype;
+    if (g <= 0 or g > 8 or ratio <= 0) return error.ShapeMismatch;
+    const bs = mlx.getShape(blocks);
+    const qL = bs[1];
+    const kb = bs[2];
+    if (bs[0] <= 0 or qL <= 0 or kb <= 0 or kv_len < qL) return error.ShapeMismatch;
+    const ng = @divTrunc(qL + g - 1, g);
+    const numax = (std.math.mul(c_int, g, kb) catch return error.ShapeMismatch) + 4;
+    const kernel = try getQsaGroupUnionKernel();
+
+    const one = [_]c_int{1};
+    const kv_data = [_]i32{kv_len};
+    const kvlen = mlx.mlx_array_new_data(&kv_data, &one, 1, .int32);
+    defer _ = mlx.mlx_array_free(kvlen);
+
+    // The union runs once per forward, so a config cache would only hold memory.
+    const config = mlx.mlx_fast_metal_kernel_config_new();
+    defer _ = mlx.mlx_fast_metal_kernel_config_free(config);
+    const u_shape = [_]c_int{ bs[0], ng, numax };
+    const l_shape = [_]c_int{ bs[0], ng };
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &u_shape, 3, .int32));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &u_shape, 3, .uint8));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &l_shape, 2, .int32));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(config, ng * 32, 1, bs[0]));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(config, 32, 1, 1));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "G", g));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(config, "RATIO", ratio));
+
+    const inputs_arr = [_]mlx.mlx_array{ blocks, kvlen };
+    const inputs_vec = mlx.mlx_vector_array_new_data(&inputs_arr, inputs_arr.len);
+    defer _ = mlx.mlx_vector_array_free(inputs_vec);
+    var outputs_vec = mlx.mlx_vector_array_new();
+    defer _ = mlx.mlx_vector_array_free(outputs_vec);
+    try mlx.check(mlx.mlx_fast_metal_kernel_apply(&outputs_vec, kernel, inputs_vec, config, s));
+    if (mlx.mlx_vector_array_size(outputs_vec) != 3) return error.MetalKernelBadOutputCount;
+    var out = QsaGroupUnion{
+        .blocks = mlx.mlx_array_new(),
+        .member = mlx.mlx_array_new(),
+        .len = mlx.mlx_array_new(),
+        .g = g,
+    };
+    errdefer out.deinit();
+    try mlx.check(mlx.mlx_vector_array_get(&out.blocks, outputs_vec, 0));
+    try mlx.check(mlx.mlx_vector_array_get(&out.member, outputs_vec, 1));
+    try mlx.check(mlx.mlx_vector_array_get(&out.len, outputs_vec, 2));
+    return out;
+}
+
 const QsaGatherCfgKey = struct {
     q_shape: ShapeKey,
     h_kv: c_int,
@@ -43309,6 +43453,25 @@ test "fusedSdpa256Masked: QSA bool-mask parity vs composed 'array' SDPA (GQA, ra
     try std.testing.expect((try fusedSdpa256Masked(s, q, k, v, scale, mask)) == null);
 }
 
+/// How a fixture row picks its blocks. `.smooth` walks a slowly drifting
+/// per-block score field so neighbouring rows keep most of their selection;
+/// `.disjoint_in_group` hands query `t` of every G-group the residue class
+/// `id % G == t` first, so one group's selections barely intersect.
+const QsaBlockKind = union(enum) {
+    random,
+    smooth,
+    disjoint_in_group: c_int,
+};
+
+const QSA_SMOOTH_AR: f32 = 0.9;
+const QSA_SMOOTH_STEP: f32 = 0.43588989; // sqrt(1 - AR*AR): keeps the walk stationary
+const QSA_SMOOTH_AMP: f32 = 0.6;
+
+fn qsaScoreDesc(score: []const f32, a: u32, b: u32) bool {
+    if (score[a] != score[b]) return score[a] > score[b];
+    return a < b;
+}
+
 /// A sorted qwen4 block selection [1,qL,kb] int32 for rows straddling the
 /// "every block fits" boundary (INT_MAX past each row's count), plus the
 /// equivalent dense [1,1,qL,kL] mask the composed reference consumes.
@@ -43316,28 +43479,79 @@ const QsaBlockFixture = struct {
     blocks: mlx.mlx_array,
     mask: mlx.mlx_array,
     fn build(rnd: std.Random, qL: c_int, kL: c_int, kb: c_int, ratio: c_int) !QsaBlockFixture {
+        return buildKind(rnd, qL, kL, kb, ratio, .random);
+    }
+    fn buildKind(rnd: std.Random, qL: c_int, kL: c_int, kb: c_int, ratio: c_int, kind: QsaBlockKind) !QsaBlockFixture {
         const ta = std.testing.allocator;
         const nq: usize = @intCast(qL);
         const nk: usize = @intCast(kL);
         const nkb: usize = @intCast(kb);
+        const nb: usize = @intCast(@divTrunc(kL, ratio) + 1);
         const blocks = try ta.alloc(i32, nq * nkb);
         defer ta.free(blocks);
         const mask = try ta.alloc(bool, nq * nk);
         defer ta.free(mask);
-        const picked = try ta.alloc(bool, @intCast(@divTrunc(kL, ratio) + 1));
+        const picked = try ta.alloc(bool, nb);
         defer ta.free(picked);
+        const base = try ta.alloc(f32, nb);
+        defer ta.free(base);
+        const walk = try ta.alloc(f32, nb);
+        defer ta.free(walk);
+        const score = try ta.alloc(f32, nb);
+        defer ta.free(score);
+        const order = try ta.alloc(u32, nb);
+        defer ta.free(order);
+        // Draw the smooth field only for `.smooth` so `.random` keeps the
+        // exact RNG stream the gather parity fixtures were written against.
+        switch (kind) {
+            .smooth => for (base, walk) |*b, *w| {
+                b.* = rnd.floatNorm(f32);
+                w.* = rnd.floatNorm(f32);
+            },
+            else => {},
+        }
         const q_off = kL - qL;
         for (0..nq) |r| {
             const p: c_int = q_off + @as(c_int, @intCast(r));
             const complete: c_int = @divTrunc(p + 1, ratio);
             const count: c_int = @min(complete, kb);
             @memset(picked, false);
-            var n: c_int = 0;
-            while (n < count) {
-                const b: usize = rnd.uintLessThan(usize, @intCast(complete));
-                if (picked[b]) continue;
-                picked[b] = true;
-                n += 1;
+            switch (kind) {
+                .random => {
+                    var n: c_int = 0;
+                    while (n < count) {
+                        const b: usize = rnd.uintLessThan(usize, @intCast(complete));
+                        if (picked[b]) continue;
+                        picked[b] = true;
+                        n += 1;
+                    }
+                },
+                .smooth => {
+                    for (walk) |*w| w.* = QSA_SMOOTH_AR * w.* + QSA_SMOOTH_STEP * rnd.floatNorm(f32);
+                    const nvis: usize = @intCast(complete);
+                    for (0..nvis) |b| {
+                        score[b] = base[b] + QSA_SMOOTH_AMP * walk[b];
+                        order[b] = @intCast(b);
+                    }
+                    std.mem.sort(u32, order[0..nvis], @as([]const f32, score[0..nvis]), qsaScoreDesc);
+                    for (order[0..@intCast(count)]) |b| picked[b] = true;
+                },
+                .disjoint_in_group => |g| {
+                    // Exactly disjoint while the visible range holds G*count
+                    // blocks; past that the classes are walked in turn so every
+                    // row still reaches its full count.
+                    const t: c_int = @rem(@as(c_int, @intCast(r)), g);
+                    var got: c_int = 0;
+                    var shift: c_int = 0;
+                    while (got < count and shift < g) : (shift += 1) {
+                        var b: c_int = @rem(t + shift, g);
+                        while (b < complete and got < count) : (b += g) {
+                            if (picked[@intCast(b)]) continue;
+                            picked[@intCast(b)] = true;
+                            got += 1;
+                        }
+                    }
+                },
             }
             var w: usize = 0;
             for (0..@intCast(complete)) |b| if (picked[b]) {
@@ -44007,6 +44221,267 @@ test "gatherQsa256: block-gathered QSA parity vs composed 'array' SDPA over the 
     try std.testing.expect((try gatherQsa256(s, q, k, v, scale, fx.blocks, 4)) == null);
     qsa_gather_override = true;
     try std.testing.expect((try gatherQsa256(s, q, k, v, scale, ours32, 4)) == null);
+}
+
+const QsaGroupPair = struct {
+    blk: i32,
+    t: u8,
+    fn less(_: void, a: QsaGroupPair, b: QsaGroupPair) bool {
+        if (a.blk != b.blk) return a.blk < b.blk;
+        return a.t < b.t;
+    }
+};
+
+/// The Design contract's union in Zig: per group of `g` consecutive queries,
+/// the ascending de-duplicated merge of every member's `count` selected block
+/// ids plus its tail block `complete` when that block still holds rows, with
+/// bit `t` of `member` set for each query that contributed the entry. Entries
+/// past the group's length are INT_MAX with a zero mask.
+fn qsaGroupUnionHost(
+    al: std.mem.Allocator,
+    blocks_row_major: []const i32,
+    qL: c_int,
+    kb: c_int,
+    kv_len: c_int,
+    ratio: c_int,
+    g: c_int,
+) !struct { blocks: []i32, member: []u8, len: []i32 } {
+    const ng: usize = @intCast(@divTrunc(qL + g - 1, g));
+    const numax: usize = @intCast(g * kb + 4);
+    const nkb: usize = @intCast(kb);
+    const ub = try al.alloc(i32, ng * numax);
+    errdefer al.free(ub);
+    const mem = try al.alloc(u8, ng * numax);
+    errdefer al.free(mem);
+    const len = try al.alloc(i32, ng);
+    errdefer al.free(len);
+    @memset(ub, std.math.maxInt(i32));
+    @memset(mem, 0);
+    const pairs = try al.alloc(QsaGroupPair, @intCast(g * (kb + 1)));
+    defer al.free(pairs);
+    for (0..ng) |gi| {
+        var np: usize = 0;
+        var t: c_int = 0;
+        while (t < g) : (t += 1) {
+            const si: c_int = @as(c_int, @intCast(gi)) * g + t;
+            if (si >= qL) break;
+            const p: c_int = kv_len - qL + si;
+            const complete: c_int = @divTrunc(p + 1, ratio);
+            const count: usize = @intCast(@min(complete, kb));
+            const off: usize = @as(usize, @intCast(si)) * nkb;
+            for (blocks_row_major[off .. off + count]) |b| {
+                pairs[np] = .{ .blk = b, .t = @intCast(t) };
+                np += 1;
+            }
+            if (p + 1 - complete * ratio > 0) {
+                pairs[np] = .{ .blk = complete, .t = @intCast(t) };
+                np += 1;
+            }
+        }
+        std.mem.sort(QsaGroupPair, pairs[0..np], {}, QsaGroupPair.less);
+        var u: usize = 0;
+        var i: usize = 0;
+        while (i < np) {
+            const b = pairs[i].blk;
+            var bits: u8 = 0;
+            while (i < np and pairs[i].blk == b) : (i += 1) bits |= @as(u8, 1) << @intCast(pairs[i].t);
+            if (u < numax) {
+                ub[gi * numax + u] = b;
+                mem[gi * numax + u] = bits;
+            }
+            u += 1;
+        }
+        len[gi] = @intCast(u);
+    }
+    return .{ .blocks = ub, .member = mem, .len = len };
+}
+
+fn qsaGroupUnionHostFree(al: std.mem.Allocator, ref: anytype) void {
+    al.free(ref.blocks);
+    al.free(ref.member);
+    al.free(ref.len);
+}
+
+const QsaGroupShape = struct { qL: c_int, kL: c_int, kb: c_int };
+
+/// (33,33,4) straddles the "every block fits" boundary, so its early rows are
+/// INT_MAX-padded and some have no selected block at all; (17,65,4) and
+/// (40,101,6) add a partial last group and rows whose tail block is empty;
+/// (129,4096,64) is the saturated top-k regime.
+const qsa_group_shapes = [_]QsaGroupShape{
+    .{ .qL = 33, .kL = 33, .kb = 4 },
+    .{ .qL = 17, .kL = 65, .kb = 4 },
+    .{ .qL = 65, .kL = 257, .kb = 16 },
+    .{ .qL = 40, .kL = 101, .kb = 6 },
+    .{ .qL = 129, .kL = 4096, .kb = 64 },
+};
+
+test "qsa group union: kernel == host merge (divergent selections, partial tails, partial last group)" {
+    const s = mlx.gpuStream();
+    if (!mlx.streamIsGpu(s)) return error.SkipZigTest;
+    const ta = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x3f19);
+    const rnd = prng.random();
+    const ratio: c_int = 4;
+    for ([_]c_int{ 4, 8 }) |g| {
+        for (qsa_group_shapes) |sh| {
+            for ([_]QsaBlockKind{ .random, .smooth, .{ .disjoint_in_group = g } }) |kind| {
+                var fx = try QsaBlockFixture.buildKind(rnd, sh.qL, sh.kL, sh.kb, ratio, kind);
+                defer fx.deinit();
+                try mlx.check(mlx.mlx_array_eval(fx.blocks));
+                const bp = mlx.mlx_array_data_int32(fx.blocks) orelse return error.InvalidDtype;
+                const nrow: usize = @intCast(sh.qL * sh.kb);
+                const ref = try qsaGroupUnionHost(ta, bp[0..nrow], sh.qL, sh.kb, sh.kL, ratio, g);
+                defer qsaGroupUnionHostFree(ta, ref);
+                var un = try qsaGroupBuildUnion(s, fx.blocks, sh.kL, ratio, g);
+                defer un.deinit();
+                try mlx.check(mlx.mlx_array_eval(un.blocks));
+                try mlx.check(mlx.mlx_array_eval(un.member));
+                try mlx.check(mlx.mlx_array_eval(un.len));
+                const ng: usize = @intCast(@divTrunc(sh.qL + g - 1, g));
+                const numax: usize = @intCast(g * sh.kb + 4);
+                const gb = mlx.mlx_array_data_int32(un.blocks) orelse return error.InvalidDtype;
+                const gm = mlx.mlx_array_data_uint8(un.member) orelse return error.InvalidDtype;
+                const gl = mlx.mlx_array_data_int32(un.len) orelse return error.InvalidDtype;
+                try std.testing.expectEqualSlices(i32, ref.len, gl[0..ng]);
+                try std.testing.expectEqualSlices(i32, ref.blocks, gb[0 .. ng * numax]);
+                try std.testing.expectEqualSlices(u8, ref.member, gm[0 .. ng * numax]);
+            }
+        }
+    }
+}
+
+test "qsa group union: every (query, key) of the single-query gather is covered exactly once" {
+    const s = mlx.gpuStream();
+    if (!mlx.streamIsGpu(s)) return error.SkipZigTest;
+    const ta = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x7d02);
+    const rnd = prng.random();
+    const ratio: c_int = 4;
+    for ([_]c_int{ 4, 8 }) |g| {
+        for (qsa_group_shapes) |sh| {
+            for ([_]QsaBlockKind{ .random, .smooth, .{ .disjoint_in_group = g } }) |kind| {
+                var fx = try QsaBlockFixture.buildKind(rnd, sh.qL, sh.kL, sh.kb, ratio, kind);
+                defer fx.deinit();
+                try mlx.check(mlx.mlx_array_eval(fx.blocks));
+                const bp = mlx.mlx_array_data_int32(fx.blocks) orelse return error.InvalidDtype;
+                var un = try qsaGroupBuildUnion(s, fx.blocks, sh.kL, ratio, g);
+                defer un.deinit();
+                try mlx.check(mlx.mlx_array_eval(un.blocks));
+                try mlx.check(mlx.mlx_array_eval(un.member));
+                try mlx.check(mlx.mlx_array_eval(un.len));
+                const gb = mlx.mlx_array_data_int32(un.blocks) orelse return error.InvalidDtype;
+                const gm = mlx.mlx_array_data_uint8(un.member) orelse return error.InvalidDtype;
+                const gl = mlx.mlx_array_data_int32(un.len) orelse return error.InvalidDtype;
+                const numax: usize = @intCast(g * sh.kb + 4);
+                const nkb: usize = @intCast(sh.kb);
+                // 0 = not in this query's gather sequence, 1 = in it and still
+                // unclaimed, 2 = already claimed by a union entry.
+                const seen = try ta.alloc(u8, @intCast(sh.kL));
+                defer ta.free(seen);
+                var si: c_int = 0;
+                while (si < sh.qL) : (si += 1) {
+                    const gi: usize = @intCast(@divTrunc(si, g));
+                    const t: u3 = @intCast(@rem(si, g));
+                    const p: c_int = sh.kL - sh.qL + si;
+                    const L = qsaGatherRowL(p, sh.kb, ratio);
+                    const off: usize = @as(usize, @intCast(si)) * nkb;
+                    const row = bp[off .. off + nkb];
+                    @memset(seen, 0);
+                    var vi: c_int = 0;
+                    while (vi < L) : (vi += 1) {
+                        const pos: usize = @intCast(qsaGatherRowPos(row, vi, p, sh.kb, ratio));
+                        try std.testing.expectEqual(@as(u8, 0), seen[pos]);
+                        seen[pos] = 1;
+                    }
+                    var covered: c_int = 0;
+                    for (0..@intCast(gl[gi])) |u| {
+                        if ((gm[gi * numax + u] >> t) & 1 == 0) continue;
+                        const blk = gb[gi * numax + u];
+                        var i: c_int = 0;
+                        while (i < ratio) : (i += 1) {
+                            const pos = blk * ratio + i;
+                            if (pos > p) continue;
+                            try std.testing.expectEqual(@as(u8, 1), seen[@intCast(pos)]);
+                            seen[@intCast(pos)] = 2;
+                            covered += 1;
+                        }
+                    }
+                    try std.testing.expectEqual(L, covered);
+                }
+            }
+        }
+    }
+}
+
+test "qsa group union inflation: rho = mean(union_len)/KB on smooth and random block maps" {
+    const s = mlx.gpuStream();
+    if (!mlx.streamIsGpu(s)) return error.SkipZigTest;
+    var prng = std.Random.DefaultPrng.init(0x11ce);
+    const rnd = prng.random();
+    const ratio: c_int = 4;
+    // Production selection statistics: 512 of kv/4 = 10240 candidate blocks.
+    const qL: c_int = 128;
+    const kL: c_int = 40960;
+    const kb: c_int = 512;
+    const kinds = [_]QsaBlockKind{ .smooth, .random };
+    const names = [_][]const u8{ "smooth", "random" };
+    for (kinds, names) |kind, name| {
+        var fx = try QsaBlockFixture.buildKind(rnd, qL, kL, kb, ratio, kind);
+        defer fx.deinit();
+        try mlx.check(mlx.mlx_array_eval(fx.blocks));
+        if (std.meta.activeTag(kind) == .smooth) {
+            const bp = mlx.mlx_array_data_int32(fx.blocks) orelse return error.InvalidDtype;
+            const nkb: usize = @intCast(kb);
+            var shared: usize = 0;
+            for (1..@intCast(qL)) |r| {
+                const a = bp[(r - 1) * nkb .. r * nkb];
+                const b = bp[r * nkb .. (r + 1) * nkb];
+                var i: usize = 0;
+                var j: usize = 0;
+                while (i < nkb and j < nkb) {
+                    if (a[i] == b[j]) {
+                        shared += 1;
+                        i += 1;
+                        j += 1;
+                    } else if (a[i] < b[j]) i += 1 else j += 1;
+                }
+            }
+            const ov = @as(f64, @floatFromInt(shared)) /
+                @as(f64, @floatFromInt(@as(usize, @intCast((qL - 1) * kb))));
+            std.debug.print("[qsa-group-rho] kind=smooth adjacent-row overlap={d:.3}\n", .{ov});
+            try std.testing.expect(ov > 0.75 and ov < 0.9);
+        }
+        for ([_]c_int{ 4, 8 }) |g| {
+            var un = try qsaGroupBuildUnion(s, fx.blocks, kL, ratio, g);
+            defer un.deinit();
+            try mlx.check(mlx.mlx_array_eval(un.len));
+            const gl = mlx.mlx_array_data_int32(un.len) orelse return error.InvalidDtype;
+            const ng: usize = @intCast(@divTrunc(qL + g - 1, g));
+            var sum: f64 = 0;
+            for (0..ng) |i| sum += @floatFromInt(gl[i]);
+            const rho = sum / @as(f64, @floatFromInt(ng)) / @as(f64, @floatFromInt(kb));
+            std.debug.print("[qsa-group-rho] G={d} kind={s} rho={d:.3}\n", .{ g, name, rho });
+            try std.testing.expect(rho <= @as(f64, @floatFromInt(g)));
+        }
+    }
+    // Fully disjoint selections are the ceiling: the union is G whole
+    // selections plus the group's distinct tail blocks, so rho lands at G
+    // itself (the tails are what push it the last 4/KB above).
+    for ([_]c_int{ 4, 8 }) |g| {
+        var fx = try QsaBlockFixture.buildKind(rnd, qL, kL, kb, ratio, .{ .disjoint_in_group = g });
+        defer fx.deinit();
+        var un = try qsaGroupBuildUnion(s, fx.blocks, kL, ratio, g);
+        defer un.deinit();
+        try mlx.check(mlx.mlx_array_eval(un.len));
+        const gl = mlx.mlx_array_data_int32(un.len) orelse return error.InvalidDtype;
+        const ng: usize = @intCast(@divTrunc(qL + g - 1, g));
+        var sum: f64 = 0;
+        for (0..ng) |i| sum += @floatFromInt(gl[i]);
+        const rho = sum / @as(f64, @floatFromInt(ng)) / @as(f64, @floatFromInt(kb));
+        std.debug.print("[qsa-group-rho] G={d} kind=disjoint rho={d:.3}\n", .{ g, rho });
+        try std.testing.expect(rho <= @as(f64, @floatFromInt(g)) + 4.0 / @as(f64, @floatFromInt(kb)));
+    }
 }
 
 test "qsa decode gather: take-then-dequantize equals dequantize-then-take" {
