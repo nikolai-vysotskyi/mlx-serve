@@ -693,7 +693,12 @@ const GDN_CHUNK_KERNEL_SCAN_BODY =
     \\const int d0  = seg * 16;
     \\
     \\threadgroup float M_s[DB][Dk + 8];    // 32 dv rows x 128 dk (transposed state)
-    \\threadgroup float A_s[16][32];        // one 16x32 tile of A_c
+    \\// A_c staging covers ALL Dk output rows: each seg reads its own 16 rows
+    \\// (d0 = seg*16), so the cooperative load must not index by the loader's
+    \\// per-thread d0. The old [16][32] tile did, mixing rows across segs; C=64
+    \\// decay hid the corrupted A_c·M term on full chunks, partial chunks (and
+    \\// real g≈1 heads) exposed it.
+    \\threadgroup float A_s[Dk][16];        // 128 dk_out rows x 16 dk cols (8 KiB)
     \\
     \\float4 st[4];
     \\{
@@ -717,15 +722,15 @@ const GDN_CHUNK_KERNEL_SCAN_BODY =
     \\    float acc[16];
     \\    for (int o = 0; o < 16; ++o) acc[o] = 0.0f;
     \\    const device float* A_base = A_c + ((size_t)(b * NC + nc) * Hv + hv) * Dk * Dk;
-    \\    for (int dkt = 0; dkt < Dk / 32; ++dkt) {
-    \\        for (int p = tid; p < 16 * 32; p += 256) {
-    \\            const int o = p / 32, i = p % 32;
-    \\            A_s[o][i] = A_base[(size_t)(d0 + o) * Dk + dkt * 32 + i];
+    \\    for (int dkt = 0; dkt < Dk / 16; ++dkt) {
+    \\        for (int p = tid; p < Dk * 16; p += 256) {
+    \\            const int o = p / 16, i = p % 16;
+    \\            A_s[o][i] = A_base[(size_t)o * Dk + dkt * 16 + i];
     \\        }
     \\        threadgroup_barrier(mem_flags::mem_threadgroup);
     \\        for (int o = 0; o < 16; ++o) {
     \\            float s = 0.0f;
-    \\            for (int i = 0; i < 32; ++i) s += M_s[dvr][dkt * 32 + i] * A_s[o][i];
+    \\            for (int i = 0; i < 16; ++i) s += M_s[dvr][dkt * 16 + i] * A_s[d0 + o][i];
     \\            acc[o] += s;
     \\        }
     \\        threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -31934,7 +31939,7 @@ const HC_UP_MIX_SOURCE =
     \\}
 ;
 
-const HcUpMixKey = struct { hc: c_int, h: c_int, rows: c_int, dtype: mlx.mlx_dtype };
+const HcUpMixKey = struct { hc: c_int, h: c_int, rows: c_int, batch: c_int, dtype: mlx.mlx_dtype };
 var hc_upmix_kernel: ?mlx.mlx_fast_metal_kernel = null;
 var hc_upmix_cfg: ?mlx.mlx_fast_metal_kernel_config = null;
 var hc_upmix_key: HcUpMixKey = std.mem.zeroes(HcUpMixKey);
@@ -32047,12 +32052,16 @@ pub fn hcUpMixFused(
     if (ssh.len != 2 or ssh[0] != hc * H or bsh.len != 2 or bsh[0] != hc * H) return null;
     if (ssh[1] * @as(c_int, @intCast(group_size)) != R or bsh[1] != ssh[1]) return null;
 
-    const key = HcUpMixKey{ .hc = hc, .h = H, .rows = M, .dtype = xd };
+    const key = HcUpMixKey{ .hc = hc, .h = H, .rows = M, .batch = batch, .dtype = xd };
     if (hc_upmix_cfg == null or !std.meta.eql(hc_upmix_key, key)) {
         if (hc_upmix_cfg) |c| _ = mlx.mlx_fast_metal_kernel_config_free(c);
         const config = mlx.mlx_fast_metal_kernel_config_new();
-        const out_shape = [_]c_int{ M, H };
-        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &out_shape, 2, xd));
+        // The composed chain's `mixed` is [B,S,H] (mean over the hc axis of
+        // [B,S,hc,H]); the kernel indexes rows flat, so declare the same
+        // 3-D shape here — a 2-D [M,H] output made the GDN conv `concatenate`
+        // downstream fail with "dimensions 3 and 2" on the first prefill.
+        const out_shape = [_]c_int{ batch, seq, H };
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(config, &out_shape, 3, xd));
         const cols_tg = @divExact(H, 64);
         const rows_tg = @divTrunc(M + 31, 32);
         try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(config, cols_tg * 32, rows_tg * 2, 2));
@@ -32311,7 +32320,7 @@ const MOE_DOWN_REDUCE_SOURCE =
     \\op[0] = T(acc0); op[1] = T(acc1); op[2] = T(acc2); op[3] = T(acc3);
 ;
 
-const MoeDownReduceKey = struct { h: c_int, k: c_int, dtype: mlx.mlx_dtype };
+const MoeDownReduceKey = struct { h: c_int, k: c_int, t: c_int, dtype: mlx.mlx_dtype };
 var moe_down_reduce_kernel: ?mlx.mlx_fast_metal_kernel = null;
 var moe_down_reduce_cfg: ?mlx.mlx_fast_metal_kernel_config = null;
 var moe_down_reduce_key: MoeDownReduceKey = std.mem.zeroes(MoeDownReduceKey);
@@ -32377,7 +32386,10 @@ pub fn moeDownReduceFused(
         inv_u32 = casted;
     }
 
-    const key = MoeDownReduceKey{ .h = hidden, .k = K, .dtype = xd };
+    // T is part of the key: the output shape and the grid both depend on it
+    // (a config cached from the 8-token warmup was reused for a 20-token
+    // prompt and the downstream reshape to [B,S,hidden] failed).
+    const key = MoeDownReduceKey{ .h = hidden, .k = K, .t = T, .dtype = xd };
     if (moe_down_reduce_cfg == null or !std.meta.eql(moe_down_reduce_key, key)) {
         if (moe_down_reduce_cfg) |c| _ = mlx.mlx_fast_metal_kernel_config_free(c);
         const config = mlx.mlx_fast_metal_kernel_config_new();
@@ -32459,7 +32471,7 @@ const PLE_GATE_SOURCE =
     \\}
 ;
 
-const PleGateKey = struct { rows: c_int, hc: c_int, hidden: c_int, dtype: mlx.mlx_dtype };
+const PleGateKey = struct { rows: c_int, batch: c_int, hc: c_int, hidden: c_int, dtype: mlx.mlx_dtype };
 var ple_gate_kernel: ?mlx.mlx_fast_metal_kernel = null;
 var ple_gate_cfg: ?mlx.mlx_fast_metal_kernel_config = null;
 var ple_gate_key: PleGateKey = std.mem.zeroes(PleGateKey);
@@ -32515,7 +32527,7 @@ pub fn pleGateFused(
 
     const sigtab = try swigluSigTable(s, dt, std.heap.c_allocator);
     const rows: c_int = batch * seq_len;
-    const key = PleGateKey{ .rows = rows, .hc = hc, .hidden = hidden, .dtype = dt };
+    const key = PleGateKey{ .rows = rows, .batch = batch, .hc = hc, .hidden = hidden, .dtype = dt };
     if (ple_gate_cfg == null or !std.meta.eql(ple_gate_key, key)) {
         if (ple_gate_cfg) |c| _ = mlx.mlx_fast_metal_kernel_config_free(c);
         const config = mlx.mlx_fast_metal_kernel_config_new();
