@@ -206,8 +206,10 @@ that lever. Test seam `prefill_turbo_override`; parity test
 "prefill turbo: an explicit per-lever env beats the master switch".
 Remaining: attention/QSA grouped-query block-reuse is now implemented (Lever
 G); still open is whether the gather is HBM-bound at all (measure per-block
-reads on M5 before betting on the ~G× staging win), a NAX perf pass for the
-MoE gate/up and HC up-mix GEMMs (the current ports are plain-SIMD and will
-need it to matter at prefill scale), and possibly a G>4 / NAX-form grouped
-gather if the profile calls for it. None of the individual levers reaches 1.5×
-alone.
+reads on M5 before betting on the ~G× staging win). The NAX perf pass for the
+MoE gate/up and HC up-mix GEMMs is now IMPLEMENTED (opt-in
+`MLX_SERVE_MOE_GATEUP_NAX=1` / `MLX_SERVE_HC_UP_MIX_NAX=1`, cooperative-tensor
+bf16×bf16→fp32 MMA, same schedule as the plain-SIMD kernels) and awaits the
+M5 re-measure to see if it matters at prefill scale. Possibly a G>4 / NAX-form
+grouped gather if the profile calls for it. None of the individual levers
+reaches 1.5× alone.

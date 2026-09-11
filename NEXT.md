@@ -280,17 +280,17 @@ small — the PLE block's cost is its key/value qmatmuls + dilated conv, not the
 ## 4. Still open (for whoever continues after M5 validation)
 
 - **NAX perf pass** for the two plain-SIMD GEMMs (MoE gate/up and HC up-mix).
-  MoE gate/up is DONE (this session): `src/kernels/moe_gateup_nax.metal` +
-  `src/kernels/nax_gemm_header.metal` (shared 16x32x16 cooperative-tensor
-  fragments, split out of `qsa_nax_header.metal`), opt-in
-  `MLX_SERVE_MOE_GATEUP_NAX=1` (gated by the NAX hardware probe), same
-  schedule/grid/templates as the plain-SIMD kernel, BK=32 so the three staged
-  tiles stay at 12 KiB. Numerics: T-rounded dequant weight + bf16xbf16->fp32
-  MMA = bit-identical to stock qmm_n modulo accumulation order.
-  `research/moe_gateup_nax_sim.py` validates fragment addressing (exact
-  coverage) + tiling + dequant + epilogue (raw fp32 gate/up matches BLAS to
-  fp32 order). HC up-mix is the remaining NAX port (same pattern, no expert
-  gather). Re-measure on M5: if Lever D/B under-deliver, the NAX lane is now
+  Both are DONE (this session): `src/kernels/moe_gateup_nax.metal` and
+  `src/kernels/hc_upmix_nax.metal` share `src/kernels/nax_gemm_header.metal`
+  (16x32x16 cooperative-tensor fragments, split out of `qsa_nax_header.metal`),
+  opt-in `MLX_SERVE_MOE_GATEUP_NAX=1` / `MLX_SERVE_HC_UP_MIX_NAX=1` (gated by
+  the NAX hardware probe), same schedule/grid/templates as the plain-SIMD
+  kernels, BK=32 staging (12 KiB MoE, 6 KiB HC). Numerics: T-rounded dequant
+  weight + bf16xbf16->fp32 MMA = bit-identical to stock qmm_n modulo
+  accumulation order. `research/moe_gateup_nax_sim.py` and
+  `research/hc_upmix_nax_sim.py` validate fragment addressing (exact coverage)
+  + tiling + dequant + epilogue (raw fp32 accumulators match BLAS to fp32
+  order). Re-measure on M5: if Lever D/B under-deliver, the NAX lane is now
   the M5 follow-up.
 - **Attention/QSA** (~23%): the grouped-query block-reuse gather is now
   implemented (Lever G, `MLX_SERVE_QSA_GROUP=1`). Still open on the attention
