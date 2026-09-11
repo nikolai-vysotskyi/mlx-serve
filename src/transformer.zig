@@ -3276,6 +3276,25 @@ pub fn qsaGroupG() c_int {
     return v;
 }
 
+/// When the grouped gather is engaged AND the NAX hardware probe passes, use
+/// the cooperative-tensor inner product (msv_qsa_group_nax) instead of the
+/// per-lane 8x8 simdgroup mma. Default on (the hardware gate decides, like
+/// MLX_SERVE_QSA_NAX); `MLX_SERVE_QSA_GROUP_NAX=0` restores the SIMD inner
+/// product for an A/B on the same grouped staging.
+var qsa_group_nax_env_cached: ?bool = null;
+pub var qsa_group_nax_override: ?bool = null;
+
+pub fn qsaGroupNaxEnabled() bool {
+    if (qsa_group_nax_override) |v| return v;
+    if (qsa_group_nax_env_cached) |v| return v;
+    const v = blk: {
+        const raw = std.c.getenv("MLX_SERVE_QSA_GROUP_NAX") orelse break :blk true;
+        break :blk !std.mem.eql(u8, std.mem.sliceTo(raw, 0), "0");
+    };
+    qsa_group_nax_env_cached = v;
+    return v;
+}
+
 /// Geometry gate for the grouped kernel: at least a full group of queries,
 /// BK a multiple of RATIO (TB = BK/RATIO whole blocks per tile), and the
 /// threadgroup bounded to 256 threads (32 lanes * NSG simdgroups * G).
@@ -4086,6 +4105,31 @@ fn getQsaNaxKernel() !mlx.mlx_fast_metal_kernel {
     return kernel;
 }
 
+var qsa_group_nax_kernel_cached: ?mlx.mlx_fast_metal_kernel = null;
+
+fn getQsaGroupNaxKernel() !mlx.mlx_fast_metal_kernel {
+    if (!verifyQmmNaxAvailable()) return error.NaxUnavailable;
+    if (qsa_group_nax_kernel_cached) |kernel| return kernel;
+    const names = [_][*:0]const u8{ "q", "k", "v", "scl", "blocks" };
+    const outputs = [_][*:0]const u8{"out"};
+    const in_vec = mlx.mlx_vector_string_new_data(&names, names.len);
+    defer _ = mlx.mlx_vector_string_free(in_vec);
+    const out_vec = mlx.mlx_vector_string_new_data(&outputs, outputs.len);
+    defer _ = mlx.mlx_vector_string_free(out_vec);
+    const kernel = mlx.mlx_fast_metal_kernel_new(
+        "msv_qsa_group_nax",
+        in_vec,
+        out_vec,
+        @embedFile("kernels/qsa_group_nax.metal"),
+        @embedFile("kernels/qsa_nax_header.metal"),
+        false,
+        false,
+    );
+    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+    qsa_group_nax_kernel_cached = kernel;
+    return kernel;
+}
+
 const QsaGatherCfgKey = struct {
     q_shape: ShapeKey,
     h_kv: c_int,
@@ -4151,15 +4195,27 @@ pub fn gatherQsa256(
     const nsg: c_int = @divTrunc(gqa + 7, 8);
     const bk: c_int = if (use_nax) 32 else qsaGatherBk();
     var use_group = false;
+    var use_group_nax = false;
     var group_g: c_int = 0;
-    if (!use_nax) {
+    if (qsaGroupEnabled()) {
         const g_cand = qsaGroupG();
-        if (qsaGroupEnabled() and qsaGroupEligible(qs[2], gqa, ratio, bk, g_cand)) {
+        if (qsaGroupEligible(qs[2], gqa, ratio, bk, g_cand)) {
             use_group = true;
             group_g = g_cand;
+            // Cooperative-tensor inner product on the grouped staging, only
+            // where the single-token NAX lane is already eligible (bf16 /
+            // hd 256 / gqa 12 / probe live), which also pins BK == 32.
+            use_group_nax = use_nax and qsaGroupNaxEnabled();
         }
     }
     const kernel = blk: {
+        if (use_group_nax) {
+            break :blk getQsaGroupNaxKernel() catch {
+                use_group_nax = false;
+                use_nax = false;
+                break :blk getAttnQsa256GroupKernel() catch return null;
+            };
+        }
         if (use_nax) {
             break :blk getQsaNaxKernel() catch {
                 qsa_nax_probe_state.store(1, .release);
@@ -4170,7 +4226,7 @@ pub fn gatherQsa256(
         if (use_group) break :blk getAttnQsa256GroupKernel() catch return null;
         break :blk getAttnQsa256Kernel() catch return null;
     };
-    qsa_gather_used_nax = use_nax;
+    qsa_gather_used_nax = use_nax or use_group_nax;
     const one = [_]c_int{1};
     const scl_data = [_]f32{scale};
     const scl = mlx.mlx_array_new_data(&scl_data, &one, 1, .float32);
@@ -4237,11 +4293,16 @@ pub fn gatherQsa256(
     try mlx.check(mlx.mlx_vector_array_get(&out, outputs_vec, 0));
     const engaged_bit: u5 = qsaEngagedBit(.prefill_gather, qs[2]) + @as(u5, if (use_nax) 16 else 0);
     if (qsa_engaged_bits.take(engaged_bit)) {
-        const tgmem: usize = if (use_nax)
+        const tgmem: usize = if (use_group_nax)
+            @as(usize, @intCast(bk)) * 264 * 2
+        else if (use_nax)
             @as(usize, @intCast(bk)) * 264 * 2 + 2 * 512 * 4
         else
             @as(usize, @intCast(bk + 8)) * 256 * 2;
-        if (use_nax) {
+        if (use_group_nax) {
+            qsa_gather_engaged_nax += 1;
+            log.info("[qsa-gather] engaged: msv_qsa_group_nax S={d} kv={d} blocks={d} bk={d} G={d} tgmem={d} (MLX_SERVE_QSA_GROUP_NAX=0 restores the grouped SIMD inner product)\n", .{ qs[2], ks[2], bs[2], bk, group_g, tgmem });
+        } else if (use_nax) {
             qsa_gather_engaged_nax += 1;
             log.info("[qsa-gather] engaged: msv_qsa_nax_precise S={d} kv={d} blocks={d} bk={d} tgmem={d} (MLX_SERVE_QSA_NAX=0 restores the stock gather)\n", .{ qs[2], ks[2], bs[2], bk, tgmem });
         } else if (use_group) {
@@ -46164,6 +46225,23 @@ test "gatherQsa256 grouped: matches the single-token gather and the composed ref
     // within the same bar the stock kernel clears.
     try std.testing.expect(d_ref <= @max(1.5 * d_stock, 4.9e-4));
     try std.testing.expect(d_gs < 0.01);
+
+    // NAX-grouped arm: same block-reuse staging, cooperative-tensor inner
+    // product. Skipped where the NAX probe fails (getQsaGroupNaxKernel refuses).
+    if (verifyQmmNaxAvailable() and qsaNaxOsOk()) {
+        qsa_group_override = true;
+        qsa_nax_override = true;
+        qsa_group_nax_override = true;
+        defer qsa_nax_override = null;
+        defer qsa_group_nax_override = null;
+        const grpnax = (try gatherQsa256(s, q, k, v, scale, fx.blocks, ratio)) orelse return error.GatherDeclined;
+        defer _ = mlx.mlx_array_free(grpnax);
+        const d_gnax_ref = try attn256MaxDiff(grpnax, ref, s);
+        const d_gnax_grp = try attn256MaxDiff(grpnax, grp, s);
+        std.debug.print("grouped-nax vs ref={e} grouped-nax vs grouped={e}\n", .{ d_gnax_ref, d_gnax_grp });
+        try std.testing.expect(d_gnax_ref <= @max(1.5 * d_stock, 4.9e-4));
+        try std.testing.expect(d_gnax_grp < 0.01);
+    }
 }
 
 test "gatherQsa256 grouped: geometry gate" {
