@@ -24548,13 +24548,22 @@ pub const Transformer = struct {
             // indexes — the bias must be added before the inverse permutation.
             try self.addExpertBias(&down_squeezed, mw.switch_down_bias, sorted_inds);
 
-            // Inverse permute → original order, then reshape back to [B,S,K,hidden].
-            var down_unsorted = mlx.mlx_array_new();
-            defer _ = mlx.mlx_array_free(down_unsorted);
-            try mlx.check(mlx.mlx_take_axis(&down_unsorted, down_squeezed, inv_order, 0, self.s));
-            const hidden = mlx.getShape(down_unsorted)[1];
-            const bskh_shape = [_]c_int{ B, S, K, hidden };
-            try mlx.check(mlx.mlx_reshape(&down_out, down_unsorted, &bskh_shape, 4, self.s));
+            // Fused tail (opt-in): one dispatch does the inverse permutation,
+            // the score weighting and the K-reduce, so the [N, hidden] unsorted
+            // copy — the largest write on this path — is never materialized.
+            if (try moePrefillReduce(self.s, down_squeezed, inv_order, norm_scores, B, S, K)) |fused| {
+                defer _ = mlx.mlx_array_free(fused);
+                try mlx.check(mlx.mlx_array_set(&down_out, fused));
+                moe_reduced = true;
+            } else {
+                // Inverse permute → original order, then reshape back to [B,S,K,hidden].
+                var down_unsorted = mlx.mlx_array_new();
+                defer _ = mlx.mlx_array_free(down_unsorted);
+                try mlx.check(mlx.mlx_take_axis(&down_unsorted, down_squeezed, inv_order, 0, self.s));
+                const hidden = mlx.getShape(down_unsorted)[1];
+                const bskh_shape = [_]c_int{ B, S, K, hidden };
+                try mlx.check(mlx.mlx_reshape(&down_out, down_unsorted, &bskh_shape, 4, self.s));
+            }
         } else if (B * S == 1 and useGatherQmvDecode(self, gate_qp, up_qp) and mw.switch_gate_s.ctx != null and mw.switch_up_s.ctx != null and mw.switch_down_s.ctx != null and
             try self.moeDecodeGatherQmv(&down_out, expert_x, inds, norm_scores, &moe_reduced, mw, gate_qp, up_qp, down_qp, D, K, B, S))
         {
@@ -31610,6 +31619,117 @@ pub fn gatherQmvDownReduce(
     errdefer _ = mlx.mlx_array_free(y);
     try mlx.check(mlx.mlx_vector_array_get(&y, outputs_vec, 0));
     return y;
+}
+
+// ── Fused MoE prefill tail: unsort + score weight + K-reduce ──
+//
+// The prefill (do_sort) path finishes the expert tail with three stock
+// dispatches over [N, hidden]: `take_axis` by `inv_order` (a second full
+// materialization of the down output), an elementwise multiply by the router
+// scores, and a sum over K. This kernel does all three in one pass — `down` is
+// read once and the unsorted intermediate is never written.
+//
+// Bit-identity is the bar, and the accumulation ORDER is what buys it: MLX's
+// Metal `sum` over a bf16 axis accumulates in the INPUT dtype, not fp32 (the
+// widening ReductionAccumulator is the CPU backend's), and col_reduce_small
+// folds min(K, 8) partial sums in a fixed order. The kernel body replicates
+// that order; an fp32 left fold does not.
+var moe_prefill_reduce_kernel: ?mlx.mlx_fast_metal_kernel = null;
+var moe_prefill_reduce_env: ?bool = null;
+var moe_prefill_reduce_engaged: bool = false;
+pub var moe_prefill_reduce_override: ?bool = null;
+
+/// MLX_SERVE_MOE_PREFILL_REDUCE=1 engages the fused prefill tail; default off.
+fn moePrefillReduceEnabled() bool {
+    if (moe_prefill_reduce_override) |v| return v;
+    if (moe_prefill_reduce_env) |v| return v;
+    const raw = std.c.getenv("MLX_SERVE_MOE_PREFILL_REDUCE");
+    const enabled = raw != null and std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "1");
+    moe_prefill_reduce_env = enabled;
+    return enabled;
+}
+
+fn getMoePrefillReduceKernel() !mlx.mlx_fast_metal_kernel {
+    if (moe_prefill_reduce_kernel) |k| return k;
+    const input_names = [_][*:0]const u8{ "down", "scores", "inv", "H_size", "K_size" };
+    const output_names = [_][*:0]const u8{"out"};
+    const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+    defer _ = mlx.mlx_vector_string_free(in_vec);
+    const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+    defer _ = mlx.mlx_vector_string_free(out_vec);
+    const kernel = mlx.mlx_fast_metal_kernel_new(
+        "mlxserve_moe_prefill_reduce",
+        in_vec,
+        out_vec,
+        @embedFile("kernels/moe_prefill_reduce.metal"),
+        "",
+        true,
+        false,
+    );
+    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+    moe_prefill_reduce_kernel = kernel;
+    return kernel;
+}
+
+/// Fused prefill unsort + router weighting + K-reduction.
+/// `down`: [N, H] post-bias expert output in SORTED order; `inv`: [N] u32, the
+/// inverse permutation; `scores`: [B,S,K] router weights in the SAME dtype as
+/// `down` (the composed multiply is elementwise in that dtype — a differing one
+/// would promote, so it declines). Returns the weighted expert sum [B,S,H], or
+/// null when outside the kernel's envelope.
+pub fn moePrefillReduce(
+    s: mlx.mlx_stream,
+    down: mlx.mlx_array,
+    inv: mlx.mlx_array,
+    scores: mlx.mlx_array,
+    B: c_int,
+    S: c_int,
+    K: c_int,
+) !?mlx.mlx_array {
+    if (!moePrefillReduceEnabled()) return null;
+    const dt = mlx.mlx_array_dtype(down);
+    if (dt != .bfloat16 and dt != .float16) return null;
+    if (mlx.mlx_array_dtype(scores) != dt) return null;
+    if (mlx.mlx_array_dtype(inv) != .uint32) return null;
+    if (K < 1 or K > 64) return null;
+    const dsh = mlx.getShape(down);
+    if (dsh.len != 2) return null;
+    const H = dsh[1];
+    if (H <= 0 or @rem(H, 4) != 0) return null;
+    const n_slots: i64 = @as(i64, B) * @as(i64, S) * @as(i64, K);
+    if (@as(i64, dsh[0]) != n_slots) return null;
+    const ish = mlx.getShape(inv);
+    if (ish.len != 1 or @as(i64, ish[0]) != n_slots) return null;
+    const ssh = mlx.getShape(scores);
+    if (ssh.len != 3 or ssh[0] != B or ssh[1] != S or ssh[2] != K) return null;
+
+    const cfg = mlx.mlx_fast_metal_kernel_config_new();
+    defer _ = mlx.mlx_fast_metal_kernel_config_free(cfg);
+    const out_shape = [_]c_int{ B, S, H };
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(cfg, &out_shape, 3, dt));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(cfg, @divExact(H, 4), B * S, 1));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(cfg, 64, 1, 1));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(cfg, "T", dt));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(cfg, "K", K));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(cfg, "H", H));
+
+    const inputs_arr = [_]mlx.mlx_array{ down, scores, inv, cachedScalarInt(H), cachedScalarInt(K) };
+    const inputs_vec = mlx.mlx_vector_array_new_data(&inputs_arr, inputs_arr.len);
+    defer _ = mlx.mlx_vector_array_free(inputs_vec);
+
+    const kernel = try getMoePrefillReduceKernel();
+    var outputs_vec = mlx.mlx_vector_array_new();
+    defer _ = mlx.mlx_vector_array_free(outputs_vec);
+    try mlx.check(mlx.mlx_fast_metal_kernel_apply(&outputs_vec, kernel, inputs_vec, cfg, s));
+    if (mlx.mlx_vector_array_size(outputs_vec) != 1) return error.MetalKernelBadOutputCount;
+    var out = mlx.mlx_array_new();
+    errdefer _ = mlx.mlx_array_free(out);
+    try mlx.check(mlx.mlx_vector_array_get(&out, outputs_vec, 0));
+    if (!moe_prefill_reduce_engaged) {
+        moe_prefill_reduce_engaged = true;
+        log.info("[moe-prefill-reduce] engaged: S={d} K={d} H={d} (MLX_SERVE_MOE_PREFILL_REDUCE=0 restores the composed chain)\n", .{ B * S, K, H });
+    }
+    return out;
 }
 
 /// Gathered matmul for MoE expert dispatch — handles both quantized and dense bf16.
@@ -46577,6 +46697,241 @@ test "moe down+reduce fused: declines outside its envelope" {
     const scq = mlx.mlx_array_new_data(sdata.ptr, &s_shape, 3, .uint8);
     defer _ = mlx.mlx_array_free(scq);
     try std.testing.expect((try gatherQmvDownReduce(s, x, w, scq, no_arr, inds, scores_f32, 4, 16, .nvfp4)) == null);
+}
+
+/// One prefill-tail parity case at `dt`. The fused kernel must be BIT-identical
+/// to `take_axis` -> multiply -> `sum`, not merely close: the composed chain's
+/// bf16 `sum` has a fixed 8-partial order that the kernel replicates.
+fn moePrefillReduceParityCaseDt(s: mlx.mlx_stream, rnd: std.Random, t: anytype, B: c_int, S: c_int, K: c_int, H: c_int, strided: bool, dt: mlx.mlx_dtype) !void {
+    const N: c_int = B * S * K;
+    // `strided`: a column slice of a [N, H+8] array, so the rows the kernel
+    // reads are NOT contiguous and MLX has to materialize them first.
+    const wide: c_int = if (strided) H + 8 else H;
+    const wide_shape = [_]c_int{ N, wide };
+    const down_bf = try attn256RandBf16(rnd, &wide_shape, s);
+    defer _ = mlx.mlx_array_free(down_bf);
+    var down_wide = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(down_wide);
+    try mlx.check(mlx.mlx_astype(&down_wide, down_bf, dt, s));
+    var down = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(down);
+    if (strided) {
+        const start = [_]c_int{ 0, 0 };
+        const stop = [_]c_int{ N, H };
+        const step = [_]c_int{ 1, 1 };
+        try mlx.check(mlx.mlx_slice(&down, down_wide, &start, 2, &stop, 2, &step, 2, s));
+    } else {
+        try mlx.check(mlx.mlx_array_set(&down, down_wide));
+    }
+
+    const scores_shape = [_]c_int{ B, S, K };
+    const scores_bf = try attn256RandBf16(rnd, &scores_shape, s);
+    defer _ = mlx.mlx_array_free(scores_bf);
+    var scores = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(scores);
+    try mlx.check(mlx.mlx_astype(&scores, scores_bf, dt, s));
+
+    // `inv_order` is a permutation of 0..N-1 by construction (argsort of a
+    // permutation), and which slot lands where is exactly what must not drift.
+    const perm = try t.allocator.alloc(u32, @intCast(N));
+    defer t.allocator.free(perm);
+    for (perm, 0..) |*v, i| v.* = @intCast(i);
+    rnd.shuffle(u32, perm);
+    const inv_shape = [_]c_int{N};
+    const inv = mlx.mlx_array_new_data(perm.ptr, &inv_shape, 1, .uint32);
+    defer _ = mlx.mlx_array_free(inv);
+
+    var unsorted = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(unsorted);
+    try mlx.check(mlx.mlx_take_axis(&unsorted, down, inv, 0, s));
+    const bskh = [_]c_int{ B, S, K, H };
+    var down_out = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(down_out);
+    try mlx.check(mlx.mlx_reshape(&down_out, unsorted, &bskh, 4, s));
+    var scores_exp = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(scores_exp);
+    try mlx.check(mlx.mlx_expand_dims(&scores_exp, scores, -1, s));
+    var weighted = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(weighted);
+    try mlx.check(mlx.mlx_multiply(&weighted, down_out, scores_exp, s));
+    var composed = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(composed);
+    try mlx.check(mlx.mlx_sum_axis(&composed, weighted, -2, false, s));
+
+    const fused = (try moePrefillReduce(s, down, inv, scores, B, S, K)) orelse return error.FusedDeclined;
+    defer _ = mlx.mlx_array_free(fused);
+    try t.expectEqual(@as(f32, 0.0), try attn256MaxDiff(fused, composed, s));
+}
+
+fn moePrefillReduceParityCase(s: mlx.mlx_stream, rnd: std.Random, t: anytype, B: c_int, S: c_int, K: c_int, H: c_int, strided: bool) !void {
+    try moePrefillReduceParityCaseDt(s, rnd, t, B, S, K, H, strided, .bfloat16);
+}
+
+test "moe prefill reduce fused: bit-identical to take_axis + multiply + sum (prefill widths)" {
+    const s = mlx.gpuStream();
+    var prng = std.Random.DefaultPrng.init(0x30E5);
+    const rnd = prng.random();
+    const t = std.testing;
+    moe_prefill_reduce_override = true;
+    defer moe_prefill_reduce_override = null;
+    // B, S, K, H, strided
+    try moePrefillReduceParityCase(s, rnd, t, 1, 17, 10, 2560, false);
+    try moePrefillReduceParityCase(s, rnd, t, 2, 17, 10, 132, true); // non-multiple grid.x, strided
+    try moePrefillReduceParityCase(s, rnd, t, 1, 130, 10, 2560, true);
+    try moePrefillReduceParityCase(s, rnd, t, 2, 130, 4, 2560, false); // K < GROUPS
+    try moePrefillReduceParityCase(s, rnd, t, 1, 8192, 10, 2560, false);
+    try moePrefillReduceParityCase(s, rnd, t, 2, 8192, 10, 2560, false);
+    // f16 activations run the same order through `half` accumulators.
+    try moePrefillReduceParityCaseDt(s, rnd, t, 1, 130, 10, 2560, false, .float16);
+    try moePrefillReduceParityCaseDt(s, rnd, t, 2, 17, 10, 132, true, .float16);
+}
+
+test "moe prefill reduce fused: declines outside its envelope" {
+    const s = mlx.gpuStream();
+    var prng = std.Random.DefaultPrng.init(0x30E6);
+    const rnd = prng.random();
+    const t = std.testing;
+    moe_prefill_reduce_override = true;
+    defer moe_prefill_reduce_override = null;
+
+    const B: c_int = 1;
+    const S: c_int = 8;
+    const K: c_int = 4;
+    const H: c_int = 64;
+    const N: c_int = B * S * K;
+    const down_shape = [_]c_int{ N, H };
+    const down = try attn256RandBf16(rnd, &down_shape, s);
+    defer _ = mlx.mlx_array_free(down);
+    const scores_shape = [_]c_int{ B, S, K };
+    const scores = try attn256RandBf16(rnd, &scores_shape, s);
+    defer _ = mlx.mlx_array_free(scores);
+    const perm = try t.allocator.alloc(u32, @intCast(N));
+    defer t.allocator.free(perm);
+    for (perm, 0..) |*v, i| v.* = @intCast(i);
+    const inv_shape = [_]c_int{N};
+    const inv = mlx.mlx_array_new_data(perm.ptr, &inv_shape, 1, .uint32);
+    defer _ = mlx.mlx_array_free(inv);
+
+    // The baseline geometry must engage, or the declines below prove nothing.
+    const engaged = (try moePrefillReduce(s, down, inv, scores, B, S, K)) orelse return error.FusedDeclined;
+    _ = mlx.mlx_array_free(engaged);
+
+    // f32 activations: MLX's f32 `sum` is a different kernel and a different order.
+    var down_f32 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(down_f32);
+    try mlx.check(mlx.mlx_astype(&down_f32, down, .float32, s));
+    var scores_f32 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(scores_f32);
+    try mlx.check(mlx.mlx_astype(&scores_f32, scores, .float32, s));
+    try t.expect((try moePrefillReduce(s, down_f32, inv, scores_f32, B, S, K)) == null);
+    // scores in another dtype than down: the composed multiply would promote.
+    try t.expect((try moePrefillReduce(s, down, inv, scores_f32, B, S, K)) == null);
+    // int32 permutation where the kernel reads u32.
+    var inv_i32 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(inv_i32);
+    try mlx.check(mlx.mlx_astype(&inv_i32, inv, .int32, s));
+    try t.expect((try moePrefillReduce(s, down, inv_i32, scores, B, S, K)) == null);
+    // H % 4 != 0: the column step is a vec4.
+    const odd_shape = [_]c_int{ N, H - 1 };
+    const down_odd = try attn256RandBf16(rnd, &odd_shape, s);
+    defer _ = mlx.mlx_array_free(down_odd);
+    try t.expect((try moePrefillReduce(s, down_odd, inv, scores, B, S, K)) == null);
+    // N != B*S*K.
+    try t.expect((try moePrefillReduce(s, down, inv, scores, B, S, K + 1)) == null);
+    // rank(down) != 2.
+    const rank3 = [_]c_int{ B * S, K, H };
+    var down_3d = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(down_3d);
+    try mlx.check(mlx.mlx_reshape(&down_3d, down, &rank3, 3, s));
+    try t.expect((try moePrefillReduce(s, down_3d, inv, scores, B, S, K)) == null);
+}
+
+test "moe prefill reduce µbench: composed chain vs fused at Flash-Next geometry (MLX_SERVE_MOE_UBENCH=1)" {
+    if (std.c.getenv("MLX_SERVE_MOE_UBENCH") == null) return error.SkipZigTest;
+    const io_util = @import("io_util.zig");
+    const tio = testing.io;
+    const s = mlx.gpuStream();
+    var prng = std.Random.DefaultPrng.init(0x30E7);
+    const rnd = prng.random();
+    const t = std.testing;
+    moe_prefill_reduce_override = true;
+    defer moe_prefill_reduce_override = null;
+
+    const B: c_int = 1;
+    const S: c_int = 8192;
+    const K: c_int = 10;
+    const H: c_int = 2560;
+    const N: c_int = B * S * K;
+
+    const down_shape = [_]c_int{ N, H };
+    const down = try attn256RandBf16(rnd, &down_shape, s);
+    defer _ = mlx.mlx_array_free(down);
+    const scores_shape = [_]c_int{ B, S, K };
+    const scores = try attn256RandBf16(rnd, &scores_shape, s);
+    defer _ = mlx.mlx_array_free(scores);
+    const perm = try t.allocator.alloc(u32, @intCast(N));
+    defer t.allocator.free(perm);
+    for (perm, 0..) |*v, i| v.* = @intCast(i);
+    rnd.shuffle(u32, perm);
+    const inv_shape = [_]c_int{N};
+    const inv = mlx.mlx_array_new_data(perm.ptr, &inv_shape, 1, .uint32);
+    defer _ = mlx.mlx_array_free(inv);
+    for ([_]mlx.mlx_array{ down, scores, inv }) |a| try mlx.check(mlx.mlx_array_eval(a));
+
+    const composedOnce = struct {
+        fn go(str: mlx.mlx_stream, dn: mlx.mlx_array, iv: mlx.mlx_array, sc: mlx.mlx_array, b: c_int, sq: c_int, k: c_int, h: c_int) !mlx.mlx_array {
+            var unsorted = mlx.mlx_array_new();
+            defer _ = mlx.mlx_array_free(unsorted);
+            try mlx.check(mlx.mlx_take_axis(&unsorted, dn, iv, 0, str));
+            const bskh = [_]c_int{ b, sq, k, h };
+            var four = mlx.mlx_array_new();
+            defer _ = mlx.mlx_array_free(four);
+            try mlx.check(mlx.mlx_reshape(&four, unsorted, &bskh, 4, str));
+            var sexp = mlx.mlx_array_new();
+            defer _ = mlx.mlx_array_free(sexp);
+            try mlx.check(mlx.mlx_expand_dims(&sexp, sc, -1, str));
+            var weighted = mlx.mlx_array_new();
+            defer _ = mlx.mlx_array_free(weighted);
+            try mlx.check(mlx.mlx_multiply(&weighted, four, sexp, str));
+            var out = mlx.mlx_array_new();
+            try mlx.check(mlx.mlx_sum_axis(&out, weighted, -2, false, str));
+            return out;
+        }
+    }.go;
+
+    const ITER = 10;
+    var sw = io_util.Stopwatch.init(tio);
+    var i: usize = 0;
+    while (i < 3) : (i += 1) {
+        const a = try composedOnce(s, down, inv, scores, B, S, K, H);
+        try mlx.check(mlx.mlx_array_eval(a));
+        _ = mlx.mlx_array_free(a);
+    }
+    sw.reset();
+    i = 0;
+    while (i < ITER) : (i += 1) {
+        const a = try composedOnce(s, down, inv, scores, B, S, K, H);
+        try mlx.check(mlx.mlx_array_eval(a));
+        _ = mlx.mlx_array_free(a);
+    }
+    const composed_ms = @as(f64, @floatFromInt(sw.read())) / 1.0e6 / @as(f64, ITER);
+
+    i = 0;
+    while (i < 3) : (i += 1) {
+        const a = (try moePrefillReduce(s, down, inv, scores, B, S, K)) orelse return error.FusedDeclined;
+        try mlx.check(mlx.mlx_array_eval(a));
+        _ = mlx.mlx_array_free(a);
+    }
+    sw.reset();
+    i = 0;
+    while (i < ITER) : (i += 1) {
+        const a = (try moePrefillReduce(s, down, inv, scores, B, S, K)) orelse return error.FusedDeclined;
+        try mlx.check(mlx.mlx_array_eval(a));
+        _ = mlx.mlx_array_free(a);
+    }
+    const fused_ms = @as(f64, @floatFromInt(sw.read())) / 1.0e6 / @as(f64, ITER);
+
+    std.debug.print("\n[moe-ubench] S={d} K={d} H={d} composed={d:.3} fused={d:.3} ms\n", .{ B * S, K, H, composed_ms, fused_ms });
 }
 
 test "lm-head prune: eligibility is the kernels' own geometry" {
