@@ -82,19 +82,23 @@ prefix-cache 0, MTP off). Target M5 Max 128 GB; agent runs cloud Linux
   into a **bf16** threadgroup tile, then runs `BlockMMA<bf16,bf16>` (fp32
   accumulate). So **stock prefill gather_qmm rounds each dequantized weight to
   bf16** — it does NOT use qdot and it does NOT keep fp32 weights.
-- Consequence: the repo's MoE gate/up (Lever D) and HC up-mix (Lever B) GEMMs
-  keep the dequantized weight in **fp32** (`a * (q·s + b)` per term, no bf16
-  weight rounding). That is strictly closer to fp32 ground truth than stock
-  (a *stronger* no-worse-than-stock claim), but it is **not bit-identical** to
-  stock gather_qmm — expect ~1e-3 parity-test deltas vs the composed chain on
-  Metal. The existing tolerances (2e-2 bf16) absorb this; do not chase those
-  deltas as kernel bugs.
-- **NAX dead-end re-confirmed**: NAX cooperative MMA needs bf16 operands, which
-  is a different rounding class again (bf16 dequant-then-MMA vs fp32 dequant-
-  then-fp32-accumulate); it cannot reproduce either stock (bf16 weight tile) or
-  the repo kernel (fp32 weight) bit-exactly. If a bit-exact prefill parity vs
-  stock is ever wanted, the port must use `dequantize` into a bf16 tile +
-  bf16×bf16 MMA, not NAX's fp32→bf16 MMA of fp32-dequantized weights.
+- **Fix applied (this session)**: `MOE_GATEUP_SOURCE` (Lever D) and
+  `HC_UP_MIX_SOURCE` (Lever B) now round the dequantized weight to `T`
+  (`sg += float(a) * float(T(q·s + b))` / `Btile = float(T(q·s+b))`) so the
+  fused kernels land in the **stock class** — bit-identical to the gather_qmm/
+  qmm chain they replace, modulo fp32 dot reduction order (the accepted ≲2 ULP
+  class). Measured (research/moe_gateup_stock_reference.py): the pre-fix fp32
+  kernel diverged from stock by up to ~64 on act at K=2560 (beyond the
+  0.02·|r|+0.02 parity bar); after the fix `kernel == composed` to the dot's
+  accumulation order. The decode-side `gatherQmv`/`gatherQmvGateUp` kernels are
+  INTENTIONALLY left fp32-dequant (they replace the repo's own fp32 gatherQmv,
+  validated no-worse-than-stock vs fp64 truth) — the two MoE paths (decode
+  custom-fp32 vs prefill stock-bf16) each match their own composed chain.
+- **NAX pass unblocked**: NAX cooperative MMA (bf16 operands, fp32 accumulate)
+  is exactly the stock class, so a NAX port of these two GEMMs can now be
+  bit-exact vs stock. Prerequisite (composition-identical reference) is
+  `research/moe_gateup_stock_reference.py`; the port must dequantize to bf16
+  and run bf16×bf16→fp32 MMA (not fp32 dequant-then-MMA).
 
 ### MoE gate/up correctness guard (this session)
 - The `do_sort` wiring now fuses only when `hidden_act == silu` **and**

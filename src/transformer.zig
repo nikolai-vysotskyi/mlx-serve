@@ -31678,10 +31678,12 @@ pub fn hcReadFused(
 // hc streams — the [B, S, hc*H] intermediate never exists.
 //
 // Reference-equal (CPU): research/hc_up_mix_reference.py shows the kernel's
-// rounding points (bf16 up via LUT, bf16 product, fp32 stream sum, 1/hc
-// scale) match the composed chain exactly at the index level; on-device the
-// GEMM accumulation order differs from stock qmm, so expect the accepted
-// 1-2 bf16 ULP class. Tile BM=32 × BN=64 × BK=64, threadgroup {32,2,2}
+// rounding points (T-rounded dequantized weight, bf16 up via LUT, bf16
+// product, fp32 stream sum, 1/hc scale) match the composed chain exactly at
+// the index level; the T-rounded weight mirrors stock qmm_n (dequantize()
+// into a T tile + BlockMMA<T,T>), so on-device only the fp32 accumulation
+// order differs from stock qmm -> the accepted 1-2 bf16 ULP class. Tile
+// BM=32 × BN=64 × BK=64, threadgroup {32,2,2}
 // (4 simdgroups, each a 16×32 tile; lane = column). Plain-SIMD fp32
 // accumulate (the NAX tensor-op tile is the M5 perf follow-up, mirroring the
 // handoff's work/hc_up_mix.metal which used the Apple MLX NAX header).
@@ -31740,8 +31742,8 @@ const HC_UP_MIX_SOURCE =
     \\            if (k < K) {
     \\                uint pw = uw_q[(size_t)n * R_by_p + (k / VPW)];
     \\                uint q = (pw >> ((k % VPW) * BITS)) & ((1u << BITS) - 1u);
-    \\                v = float(q) * float(uw_s[(size_t)n * R_by_gs + (k / GS)])
-    \\                  + float(uw_b[(size_t)n * R_by_gs + (k / GS)]);
+    \\                v = float(T(float(q) * float(uw_s[(size_t)n * R_by_gs + (k / GS)])
+    \\                  + float(uw_b[(size_t)n * R_by_gs + (k / GS)])));
     \\            }
     \\            Btile[t] = v;
     \\        }
@@ -32404,15 +32406,12 @@ const MOE_GATEUP_SOURCE =
     \\// Tiled GEMM + GeGLU epilogue, plain SIMD. One threadgroup per (tile,
     \\// column-block): every slot in a tile shares ONE expert, so the packed
     \\// gate/up weights for that expert are streamed once per K-block. Dequant
-    \\// stays in fp32 (q*scale+bias computed in fp32, no intermediate
-    \\// bf16 rounding of the weight). NOTE: stock prefill gather_qmm
-    \\// (affine_gather_qmm_n -> qmm_n_impl) DOES round the dequantized
-    \\// weight to bf16 (dequantize() into a bf16 tile + BlockMMA<bf16,
-    \\// bf16>); keeping fp32 here is strictly closer to fp32 ground truth
-    \\// but NOT bit-identical to stock, so the parity tests hold this
-    \\// kernel to the fp32-dequant reference and a 2e-2 bf16 tolerance vs
-    \\// the composed chain. The fp32 dot rounds to bf16 gate/up once at
-    \\// the end.
+    \\// gate/up weights for that expert are streamed once per K-block. The
+    \\// dequantized weight is rounded to T (bf16/f16) exactly like stock
+    \\// prefill gather_qmm (affine_gather_qmm_n -> qmm_n_impl dequantize()
+    \\// into a T tile + BlockMMA<T,T>), so this kernel is bit-identical to
+    \\// the composed gather_qmm chain modulo fp32 dot reduction order. The
+    \\// fp32 dot is rounded to bf16 gate/up once at the end.
     \\constexpr int BM = 64;
     \\constexpr int BN = 64;
     \\constexpr int BK = 64;
@@ -32481,8 +32480,8 @@ const MOE_GATEUP_SOURCE =
     \\                T a = Atile[(tm + i) * BK + kk + j];
     \\                float qg = float((pwg >> (j * BITS)) & ((1u << BITS) - 1u));
     \\                float qu = float((pwu >> (j * BITS)) & ((1u << BITS) - 1u));
-    \\                sg += float(a) * (qg * s_g + b_g);
-    \\                su += float(a) * (qu * s_u + b_u);
+    \\                sg += float(a) * float(T(qg * s_g + b_g));
+    \\                su += float(a) * float(T(qu * s_u + b_u));
     \\            }
     \\        }
     \\        accg[i] += sg;
@@ -37709,9 +37708,12 @@ test "fused prefill gate+up+GeGLU matches gather_qmm + fusedSwiGLU (sorted path)
     // Reference = the SORTED prefill chain the kernel replaces: gather_qmm for
     // gate and up (each [Ntot,1,K] x [E,N,K*4/32] → [Ntot,1,N], squeeze) then
     // fusedSwiGLU. The kernel streams the same packed uint32 weights, rounds
-    // the fp32 dot to bf16 gate/up, then applies the SAME LUT silu·up — so the
-    // two differ only by the fp32 dot's reduction order (≲ 2 bf16 ULP). See
-    // research/moe_gateup_reference.py for the numpy model.
+    // the dequantized weight to T (like stock qmm_n dequantize(), which is what
+    // gather_qmm computes), rounds the fp32 dot to bf16 gate/up, then applies
+    // the SAME LUT silu·up — so the two differ only by the fp32 dot's reduction
+    // order (≲ 2 bf16 ULP). See research/moe_gateup_reference.py for the numpy
+    // model and research/moe_gateup_stock_reference.py for why the T-rounding
+    // matters (stock rounds weights to bf16; an fp32 weight would NOT match).
     const s = mlx.gpuStream();
     const allocator = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0x6A7E0FF5 + 7);
