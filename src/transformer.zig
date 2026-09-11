@@ -31780,7 +31780,11 @@ pub fn moePrefillReduce(
     if (dt != .bfloat16 and dt != .float16) return null;
     if (mlx.mlx_array_dtype(scores) != dt) return null;
     if (mlx.mlx_array_dtype(inv) != .uint32) return null;
-    if (K < 1 or K > 64) return null;
+    // MLX picks `col_reduce_small` — the 8-partial order this kernel
+    // replicates — only while `reduction_size * non_col_reductions < 32`
+    // (reduce.cpp:950-951). At K >= 32 the composed chain switches to a
+    // different reduction kernel with a different order.
+    if (K < 1 or K > 31) return null;
     const dsh = mlx.getShape(down);
     if (dsh.len != 2) return null;
     const H = dsh[1];
@@ -46870,6 +46874,7 @@ test "moe prefill reduce fused: bit-identical to take_axis + multiply + sum (pre
     try moePrefillReduceParityCase(s, rnd, t, 2, 130, 4, 2560, false); // K < GROUPS
     try moePrefillReduceParityCase(s, rnd, t, 1, 8192, 10, 2560, false);
     try moePrefillReduceParityCase(s, rnd, t, 2, 8192, 10, 2560, false);
+    try moePrefillReduceParityCase(s, rnd, t, 1, 17, 31, 132, false); // widest K still on col_reduce_small
     // f16 activations run the same order through `half` accumulators.
     try moePrefillReduceParityCaseDt(s, rnd, t, 1, 130, 10, 2560, false, .float16);
     try moePrefillReduceParityCaseDt(s, rnd, t, 2, 17, 10, 132, true, .float16);
@@ -46933,6 +46938,26 @@ test "moe prefill reduce fused: declines outside its envelope" {
     defer _ = mlx.mlx_array_free(down_3d);
     try mlx.check(mlx.mlx_reshape(&down_3d, down, &rank3, 3, s));
     try t.expect((try moePrefillReduce(s, down_3d, inv, scores, B, S, K)) == null);
+
+    // The col_reduce_small envelope's edge: K = 31 still engages, K = 32 is
+    // where the composed chain changes reduction kernel and must not.
+    for ([_]c_int{ 31, 32 }) |kk| {
+        const kk_shape = [_]c_int{ kk, H };
+        const down_k = try attn256RandBf16(rnd, &kk_shape, s);
+        defer _ = mlx.mlx_array_free(down_k);
+        const sc_shape = [_]c_int{ 1, 1, kk };
+        const scores_k = try attn256RandBf16(rnd, &sc_shape, s);
+        defer _ = mlx.mlx_array_free(scores_k);
+        const perm_k = try t.allocator.alloc(u32, @intCast(kk));
+        defer t.allocator.free(perm_k);
+        for (perm_k, 0..) |*v, i| v.* = @intCast(i);
+        const inv_k_shape = [_]c_int{kk};
+        const inv_k = mlx.mlx_array_new_data(perm_k.ptr, &inv_k_shape, 1, .uint32);
+        defer _ = mlx.mlx_array_free(inv_k);
+        const got = try moePrefillReduce(s, down_k, inv_k, scores_k, 1, 1, kk);
+        if (got) |g| _ = mlx.mlx_array_free(g);
+        try t.expect((got != null) == (kk == 31));
+    }
 }
 
 test "moe prefill reduce µbench: composed chain vs fused at Flash-Next geometry (MLX_SERVE_MOE_UBENCH=1)" {
