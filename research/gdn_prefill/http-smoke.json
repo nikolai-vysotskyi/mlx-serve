@@ -1,0 +1,95 @@
+{
+  "kind": "Short HTTP smoke, not llmprobe or long-context target validation",
+  "machine": "M5 Max 128 GB",
+  "macOS": "26.5",
+  "base": "fa76a4b",
+  "same_binary": true,
+  "release_binary_sha256": "ae35fe66c366229c8f45cdbd0e17e5b2fe8c7028fd320eaedbf35f661a227ab8",
+  "arms": [
+    {
+      "gdn_prefill": true,
+      "qsa_pair": true,
+      "hc_prefill": true,
+      "cells": [
+        {
+          "prompt_tokens": 13515,
+          "prefill_tok_s": 2380.1
+        },
+        {
+          "prompt_tokens": 15715,
+          "prefill_tok_s": 2509.4
+        }
+      ],
+      "responses": [
+        {
+          "arm": "on",
+          "usage": {
+            "prompt_tokens": 13515,
+            "completion_tokens": 10,
+            "total_tokens": 13525,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "answer": "MAGNOLIA-7731"
+        },
+        {
+          "arm": "on",
+          "usage": {
+            "prompt_tokens": 15715,
+            "completion_tokens": 10,
+            "total_tokens": 15725,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "answer": "MAGNOLIA-7731"
+        }
+      ],
+      "cold_gdn": true
+    },
+    {
+      "gdn_prefill": false,
+      "qsa_pair": true,
+      "hc_prefill": true,
+      "cells": [
+        {
+          "prompt_tokens": 13515,
+          "prefill_tok_s": 2316.5
+        },
+        {
+          "prompt_tokens": 15715,
+          "prefill_tok_s": 2395.7
+        }
+      ],
+      "responses": [
+        {
+          "arm": "on",
+          "usage": {
+            "prompt_tokens": 13515,
+            "completion_tokens": 10,
+            "total_tokens": 13525,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "answer": "MAGNOLIA-7731"
+        },
+        {
+          "arm": "on",
+          "usage": {
+            "prompt_tokens": 15715,
+            "completion_tokens": 10,
+            "total_tokens": 15725,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "answer": "MAGNOLIA-7731"
+        }
+      ],
+      "cold_gdn": false
+    }
+  ],
+  "warmed_incremental_ratio": 1.0474600325583339
+}
