@@ -18805,6 +18805,11 @@ pub const Transformer = struct {
         );
 
         var prof = try Qwen4FwdProf.init(seq_len, h);
+        const cadence_timing = seq_len >= 512 and diagEnvOn("QWEN4_PREFILL_CADENCE_TIMING") and !prof.timing;
+        var cadence_clock = if (cadence_timing) ProfClock.init() else undefined;
+        var host_ns: u64 = 0;
+        var eval_ns: u64 = 0;
+        var cadence_points: u32 = 0;
         var pending: ?HcPending = null;
         defer if (pending) |*pd| pd.deinit();
 
@@ -18873,10 +18878,20 @@ pub const Transformer = struct {
             }
             if (is_prefill and prefillEvalCadenceApplies(seq_len) and ((layer_idx + 1) % eval_cadence == 0 or layer_idx + 1 == layerCap(cfg.num_hidden_layers))) {
                 try self.hcFlush(&h, batch, seq_len, &pending);
+                if (cadence_timing) host_ns += cadence_clock.lap();
                 try evalCadencePoint(h, ctx.ssm_entries);
+                if (cadence_timing) {
+                    eval_ns += cadence_clock.lap();
+                    cadence_points += 1;
+                }
             }
             dt.layer(h, layer_idx);
         }
+
+        if (cadence_timing) log.info("[prefill-cadence] S={d} kv={d} points={d} host_ms={d:.3} eval_ms={d:.3} extra_sync=false\n", .{
+            seq_len,                                offset + @as(usize, @intCast(seq_len)), cadence_points,
+            @as(f64, @floatFromInt(host_ns)) / 1e6, @as(f64, @floatFromInt(eval_ns)) / 1e6,
+        });
 
         if (ctx.capture_stream_all != null or ctx.capture_hidden != null or ctx.capture_hidden_all != null) try self.hcFlush(&h, batch, seq_len, &pending);
         ctx.moe_seq_offset.* += @intCast(seq_len);
@@ -24214,6 +24229,7 @@ pub const Transformer = struct {
             try mlx.check(mlx.mlx_reshape(&flat_inds, inds, &flat_shape, 1, self.s));
 
             const mg = @import("moe_prefill.zig");
+            if (cfg.isQwen4() and B == 1) try mg.captureRoutes(self.allocator, flat_inds, S);
             const grouped = if (mg.enabled() and cfg.isQwen4() and B == 1 and S >= 2048 and S <= 8192 and D == 2560 and K == 10 and cfg.num_experts == 512 and !has_expert_bias and mlx.mlx_array_dtype(expert_x) == .bfloat16 and mlx.mlx_array_dtype(norm_scores) == .bfloat16 and gate_qp.bits == 4 and up_qp.bits == 4 and down_qp.bits == 4 and gate_qp.mode == .affine and up_qp.mode == .affine and down_qp.mode == .affine)
                 try mg.group(self.s, flat_inds)
             else

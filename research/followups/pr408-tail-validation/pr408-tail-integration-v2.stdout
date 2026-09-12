@@ -1,0 +1,7 @@
+GPU acquired: qsa-pair-test-16120 (parent 16120)
+{"arm": "on", "usage": {"prompt_tokens": 8296, "completion_tokens": 10, "total_tokens": 8306, "prompt_tokens_details": {"cached_tokens": 0}}, "answer": "MAGNOLIA-7731"}
+{"arm": "on", "usage": {"prompt_tokens": 13515, "completion_tokens": 10, "total_tokens": 13525, "prompt_tokens_details": {"cached_tokens": 0}}, "answer": "MAGNOLIA-7731"}
+{"arm": "on", "usage": {"prompt_tokens": 15715, "completion_tokens": 10, "total_tokens": 15725, "prompt_tokens_details": {"cached_tokens": 0}}, "answer": "MAGNOLIA-7731"}
+PASS: long prefill answers and expected QSA arm
+Logs: <workspace>/work/mlx-serve-prefill-pr/../pr408-tail-integration-v2/server.log
+GPU released: qsa-pair-test-16120

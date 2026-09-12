@@ -1,0 +1,3 @@
+# Matched HTTP investigation (not llmprobe)
+
+See ../20260913-next-levers.md for interpretation and source/binary distinctions. The combined-cadence and combined-ablation screens use binary6302e6ba..., from the d23d9df-integrated research tree with only the cadence diagnostic added. The later route-capture uses binary86916c30... with additional opt-in routing capture; its timings are not throughput evidence. Source fixture hashes and prompt hashes are in each JSON. Local workspace/home prefixes and the unrelated startup model inventory were removed from public copies. No timing/response value was edited. All prompts contain public source code and the benchmark passphrase.

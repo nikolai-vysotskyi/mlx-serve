@@ -1,0 +1,17 @@
+test
++- run test 2 pass, 1 fail (3 total)
+error: 'transformer.test.hc prefill: pending write, normalized streams, native inject reduction and BF16 mix across shapes' failed:
+       expected 0, found 0.001953125
+failed command: ./.zig-cache/o/59c5a25cf976613973a307d65d606a2e/test --cache-dir=./.zig-cache --seed=0xa870e5c4 --listen=-
+
+Build Summary: 7/9 steps succeeded (1 failed); 22/23 tests passed (1 failed)
+test transitive failure
++- run test 2 pass, 1 fail (3 total)
+|  +- compile test fast native-native.26.2 success 12s MaxRSS:504M
+|     +- options cached
+|     +- translate-c cached 37ms MaxRSS:30M
+|     +- translate-c cached 45ms MaxRSS:30M
+|     +- translate-c cached 41ms MaxRSS:30M
++- run test 20 pass (20 total) 1s MaxRSS:2M
+   +- compile test fast native-native.26.2 success 5s MaxRSS:375M
+

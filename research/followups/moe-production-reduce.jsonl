@@ -1,0 +1,5 @@
+{"mode":0,"tokens":8192,"max_diff":0,"different_fraction":0,"median_ms":29.9697,"grouping_gather_expert_reduce_included":true}
+{"mode":1,"tokens":8192,"max_diff":0,"different_fraction":0,"median_ms":25.9726,"grouping_gather_expert_reduce_included":true}
+{"mode":4,"tokens":8192,"max_diff":0,"different_fraction":0,"median_ms":25.9936,"grouping_gather_expert_reduce_included":true}
+{"mode":1,"tokens":8192,"max_diff":0,"different_fraction":0,"median_ms":25.5075,"grouping_gather_expert_reduce_included":true}
+{"mode":0,"tokens":8192,"max_diff":0,"different_fraction":0,"median_ms":29.2832,"grouping_gather_expert_reduce_included":true}

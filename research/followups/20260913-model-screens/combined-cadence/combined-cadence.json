@@ -1,0 +1,258 @@
+{
+  "kind": "HTTP matched screening; not llmprobe",
+  "binary_sha256": "6302e6ba4be0307e30db60c32a0fcd36dfb918ed2a2bcf9b5abd2e0661f8451e",
+  "power": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=23199843)\t70%; charging; 1:41 remaining present: true\n",
+  "corpus_sha256": "1b0d4f22b5f08c471a93caac3d5f4729be34c64a04e4c0e303a3fc44bcde36a0",
+  "records": [
+    {
+      "arm": "current",
+      "loaded_s": 14.764672875000542,
+      "memory_before": {
+        "active_bytes": 73232378492,
+        "peak_bytes": 73494918980,
+        "available_bytes": 40010678272,
+        "max_safe_context": 262144,
+        "cache_bytes": 65207588
+      },
+      "env": {
+        "MLX_SERVE_PREFILL_CHUNK": "8192",
+        "MLX_SERVE_PREFILL_TRACE": "1",
+        "MLX_SERVE_QSA_PAIR": "1",
+        "MLX_SERVE_HC_PREFILL": "1",
+        "MLX_SERVE_GDN_PREFILL_FUSED": "1",
+        "MLX_SERVE_PLE_PACKED": "0",
+        "MLX_SERVE_PLE_AHEAD": "0",
+        "MLX_SERVE_PLE_TIMING": "1",
+        "MLX_SERVE_MOE_PREFILL_GROUP": "0",
+        "QWEN4_PREFILL_CADENCE_TIMING": "1"
+      },
+      "requests": [
+        {
+          "wall_s": 6.722696959001041,
+          "response": {
+            "id": "chatcmpl-1789248648741",
+            "object": "chat.completion",
+            "created": 1789248648,
+            "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+            "system_fingerprint": "mlx-serve",
+            "choices": [
+              {
+                "index": 0,
+                "message": {
+                  "role": "assistant",
+                  "content": "MAGNOLIA-7731"
+                },
+                "logprobs": null,
+                "finish_reason": "stop"
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 13515,
+              "completion_tokens": 10,
+              "total_tokens": 13525,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "prompt_n": 13515,
+              "cached_n": 0,
+              "prompt_ms": 6490.969,
+              "prompt_per_second": 2082.124,
+              "predicted_n": 10,
+              "predicted_ms": 208.349,
+              "predicted_per_second": 47.996,
+              "tokenize_ms": 4.498
+            }
+          },
+          "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe",
+          "prefill_tps": 2082.1,
+          "decode_tps": 48.0,
+          "memory_after": {
+            "active_bytes": 73223867788,
+            "peak_bytes": 76549476078,
+            "available_bytes": 39330856960,
+            "max_safe_context": 262144,
+            "cache_bytes": 416343101
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=40199b, tools=0b, tool_msgs=0) \n  > \"Nonce 81492017. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=13515 tokens, max_gen=32, ctx=131072\n[hc-prefill] engaged: S=8192 B=1 pending=false native_inject=true\n[gdn-prefill] engaged: S=8192 B=1 cold=true\n[qwen4] PLE prefill gather: SERIAL mmap walk (prefill width: 131072 rows; the pool engages past kv 262144, QWEN4_PLE_PREFETCH_PREFILL_MIN_KV overrides)\n[qsa] sparse attention engaged: kv=8192 blocks=2048 top-512 (budget 2048, ratio 4)\n[qsa-select] engaged (S=8192 nb=2048 k=512 tg=256) \u2014 MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain\n[qsa-pair] engaged: S=8192 kv=8192 KB=512 B=1\n[prefill-cadence] S=8192 kv=8192 points=12 host_ms=198.299 eval_ms=3609.299 extra_sync=false\n[prefill-cadence] S=5322 kv=13514 points=12 host_ms=255.741 eval_ms=2390.267 extra_sync=false\n[qsa-score] engaged (S=1 nb=3378 layout=base nsg=4 nsh=106) \u2014 MLX_SERVE_QSA_SCORE_FUSED=0 restores the composed chain\n[qsa-select] engaged (S=1 nb=3378 k=512 tg=1024) \u2014 MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain\n[qsa-decode-gather] engaged (S=1 kv=13515 rows=2051) (MLX_SERVE_QSA_DECODE_GATHER=0 restores the dense mask arm)\n  [prefill-trace] tokens=13515 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=6453ms eval=6ms last_token=5ms total=6465ms\n  [qsa-arms] qsa=decode_gather calls=180 mask=0 decode=156 verify=0 prefill=24\n  <- 13515+10 tokens (6717ms) [prefill: 2082.1 tok/s, decode: 48.0 tok/s] [stop]\n"
+        },
+        {
+          "wall_s": 36.26901029200235,
+          "response": {
+            "id": "chatcmpl-1789248685115",
+            "object": "chat.completion",
+            "created": 1789248685,
+            "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+            "system_fingerprint": "mlx-serve",
+            "choices": [
+              {
+                "index": 0,
+                "message": {
+                  "role": "assistant",
+                  "content": "MAGNOLIA-7731"
+                },
+                "logprobs": null,
+                "finish_reason": "stop"
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 64947,
+              "completion_tokens": 10,
+              "total_tokens": 64957,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "prompt_n": 64947,
+              "cached_n": 0,
+              "prompt_ms": 36001.045,
+              "prompt_per_second": 1804.031,
+              "predicted_n": 10,
+              "predicted_ms": 224.825,
+              "predicted_per_second": 44.479,
+              "tokenize_ms": 21.489
+            }
+          },
+          "prompt_sha256": "91e98ba2b23fe436f025c0c7d4aac5dcd5d464cd2c61a1ca9b46ef9d81f574ee",
+          "prefill_tps": 1804.0,
+          "decode_tps": 44.5,
+          "memory_after": {
+            "active_bytes": 73223867796,
+            "peak_bytes": 78214759746,
+            "available_bytes": 37664129024,
+            "max_safe_context": 262144,
+            "cache_bytes": 1925625103
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=194075b, tools=0b, tool_msgs=0) \n  > \"Nonce 52839106. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=64947 tokens, max_gen=32, ctx=131072\n[prefill-cadence] S=8192 kv=8192 points=12 host_ms=54.769 eval_ms=3845.052 extra_sync=false\n[prefill-cadence] S=8192 kv=16384 points=12 host_ms=60.750 eval_ms=4061.704 extra_sync=false\n[prefill-cadence] S=8192 kv=24576 points=12 host_ms=80.699 eval_ms=4323.439 extra_sync=false\n[prefill-cadence] S=8192 kv=32768 points=12 host_ms=73.977 eval_ms=4633.752 extra_sync=false\n[prefill-cadence] S=8192 kv=40960 points=12 host_ms=60.149 eval_ms=4808.633 extra_sync=false\n[prefill-cadence] S=8192 kv=49152 points=12 host_ms=60.779 eval_ms=4817.104 extra_sync=false\n[prefill-cadence] S=8192 kv=57344 points=12 host_ms=58.284 eval_ms=4785.791 extra_sync=false\n[prefill-cadence] S=7602 kv=64946 points=12 host_ms=64.216 eval_ms=4131.758 extra_sync=false\n  [prefill-trace] tokens=64947 chunks=8 chunk_size=8192 chunk_widths=8192..8192 chunked=35922ms eval=43ms last_token=5ms total=35971ms\n  [qsa-arms] qsa=decode_gather calls=252 mask=0 decode=156 verify=0 prefill=96\n  <- 64947+10 tokens (36245ms) [prefill: 1804.0 tok/s, decode: 44.5 tok/s] [stop]\n"
+        }
+      ]
+    },
+    {
+      "arm": "combined",
+      "loaded_s": 13.486123250000674,
+      "memory_before": {
+        "active_bytes": 73225314044,
+        "peak_bytes": 73494918980,
+        "available_bytes": 39528972288,
+        "max_safe_context": 262144,
+        "cache_bytes": 72288356
+      },
+      "env": {
+        "MLX_SERVE_PREFILL_CHUNK": "8192",
+        "MLX_SERVE_PREFILL_TRACE": "1",
+        "MLX_SERVE_QSA_PAIR": "1",
+        "MLX_SERVE_HC_PREFILL": "1",
+        "MLX_SERVE_GDN_PREFILL_FUSED": "1",
+        "MLX_SERVE_PLE_PACKED": "1",
+        "MLX_SERVE_PLE_AHEAD": "1",
+        "MLX_SERVE_PLE_TIMING": "1",
+        "MLX_SERVE_MOE_PREFILL_GROUP": "1",
+        "QWEN4_PREFILL_CADENCE_TIMING": "1"
+      },
+      "requests": [
+        {
+          "wall_s": 10.486632916999952,
+          "response": {
+            "id": "chatcmpl-1789248710951",
+            "object": "chat.completion",
+            "created": 1789248710,
+            "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+            "system_fingerprint": "mlx-serve",
+            "choices": [
+              {
+                "index": 0,
+                "message": {
+                  "role": "assistant",
+                  "content": "MAGNOLIA-7731"
+                },
+                "logprobs": null,
+                "finish_reason": "stop"
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 13515,
+              "completion_tokens": 10,
+              "total_tokens": 13525,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "prompt_n": 13515,
+              "cached_n": 0,
+              "prompt_ms": 10238.492,
+              "prompt_per_second": 1320.019,
+              "predicted_n": 10,
+              "predicted_ms": 223.168,
+              "predicted_per_second": 44.809,
+              "tokenize_ms": 4.508
+            }
+          },
+          "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe",
+          "prefill_tps": 1320.0,
+          "decode_tps": 44.8,
+          "memory_after": {
+            "active_bytes": 73223867788,
+            "peak_bytes": 76412177994,
+            "available_bytes": 39648821248,
+            "max_safe_context": 262144,
+            "cache_bytes": 416340061
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=40199b, tools=0b, tool_msgs=0) \n  > \"Nonce 81492017. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=13515 tokens, max_gen=32, ctx=131072\n[hc-prefill] engaged: S=8192 B=1 pending=false native_inject=true\n[gdn-prefill] engaged: S=8192 B=1 cold=true\n[moe-prefill-group] engaged: tokens=8192 E=512 K=10 H=2560 native_projections=true bf16_grouped_reduce=true\n[ple-packed] engaged: rows=131072 unique=67449 packed_bytes=6744900 immutable=true output=mlx-bf16\n[qsa] sparse attention engaged: kv=8192 blocks=2048 top-512 (budget 2048, ratio 4)\n[qsa-select] engaged (S=8192 nb=2048 k=512 tg=256) \u2014 MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain\n[qsa-pair] engaged: S=8192 kv=8192 KB=512 B=1\n[prefill-cadence] S=8192 kv=8192 points=12 host_ms=1855.299 eval_ms=5161.187 extra_sync=false\n[prefill-cadence] S=5322 kv=13514 points=12 host_ms=10.605 eval_ms=3171.371 extra_sync=false\n[ple-ahead] chunks=2/2 pack=2166.01ms wait=1850.71ms row_hits=16190 row_misses=85755 cache_limit_rows=262144\n[qsa-score] engaged (S=1 nb=3378 layout=base nsg=4 nsh=106) \u2014 MLX_SERVE_QSA_SCORE_FUSED=0 restores the composed chain\n[qsa-select] engaged (S=1 nb=3378 k=512 tg=1024) \u2014 MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain\n[qsa-decode-gather] engaged (S=1 kv=13515 rows=2051) (MLX_SERVE_QSA_DECODE_GATHER=0 restores the dense mask arm)\n  [prefill-trace] tokens=13515 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=10199ms eval=8ms last_token=2ms total=10210ms\n  [qsa-arms] qsa=decode_gather calls=180 mask=0 decode=156 verify=0 prefill=24\n  <- 13515+10 tokens (10481ms) [prefill: 1320.0 tok/s, decode: 44.8 tok/s] [stop]\n"
+        },
+        {
+          "wall_s": 43.99391200000173,
+          "response": {
+            "id": "chatcmpl-1789248755056",
+            "object": "chat.completion",
+            "created": 1789248755,
+            "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+            "system_fingerprint": "mlx-serve",
+            "choices": [
+              {
+                "index": 0,
+                "message": {
+                  "role": "assistant",
+                  "content": "MAGNOLIA-7731"
+                },
+                "logprobs": null,
+                "finish_reason": "stop"
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 64947,
+              "completion_tokens": 10,
+              "total_tokens": 64957,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "prompt_n": 64947,
+              "cached_n": 0,
+              "prompt_ms": 43718.028,
+              "prompt_per_second": 1485.589,
+              "predicted_n": 10,
+              "predicted_ms": 231.333,
+              "predicted_per_second": 43.228,
+              "tokenize_ms": 22.743
+            }
+          },
+          "prompt_sha256": "91e98ba2b23fe436f025c0c7d4aac5dcd5d464cd2c61a1ca9b46ef9d81f574ee",
+          "prefill_tps": 1485.6,
+          "decode_tps": 43.2,
+          "memory_after": {
+            "active_bytes": 73223867796,
+            "peak_bytes": 78144818642,
+            "available_bytes": 37768462336,
+            "max_safe_context": 262144,
+            "cache_bytes": 1925629711
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=194075b, tools=0b, tool_msgs=0) \n  > \"Nonce 52839106. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=64947 tokens, max_gen=32, ctx=131072\n[prefill-cadence] S=8192 kv=8192 points=12 host_ms=12.245 eval_ms=5331.040 extra_sync=false\n[prefill-cadence] S=8192 kv=16384 points=12 host_ms=5.128 eval_ms=5389.579 extra_sync=false\n[prefill-cadence] S=8192 kv=24576 points=12 host_ms=14.183 eval_ms=5586.369 extra_sync=false\n[prefill-cadence] S=8192 kv=32768 points=12 host_ms=14.417 eval_ms=5440.868 extra_sync=false\n[prefill-cadence] S=8192 kv=40960 points=12 host_ms=14.266 eval_ms=5436.101 extra_sync=false\n[prefill-cadence] S=8192 kv=49152 points=12 host_ms=15.510 eval_ms=5675.192 extra_sync=false\n[prefill-cadence] S=8192 kv=57344 points=12 host_ms=15.389 eval_ms=5817.457 extra_sync=false\n[prefill-cadence] S=7602 kv=64946 points=12 host_ms=15.709 eval_ms=4868.114 extra_sync=false\n[ple-ahead] chunks=8/8 pack=76.64ms wait=7.90ms row_hits=400420 row_misses=85763 cache_limit_rows=262144\n  [prefill-trace] tokens=64947 chunks=8 chunk_size=8192 chunk_widths=8192..8192 chunked=43656ms eval=25ms last_token=5ms total=43689ms\n  [qsa-arms] qsa=decode_gather calls=252 mask=0 decode=156 verify=0 prefill=96\n  <- 64947+10 tokens (43969ms) [prefill: 1485.6 tok/s, decode: 43.2 tok/s] [stop]\n"
+        }
+      ]
+    }
+  ]
+}

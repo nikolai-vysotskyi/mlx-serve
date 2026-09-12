@@ -1,0 +1,1 @@
+routing fixture=routing-fixtures/routes.3.safetensors max_expert_rows=4296 nonempty_experts=486 aligned_64_tiles=1583

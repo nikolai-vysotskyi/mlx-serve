@@ -4,6 +4,24 @@ const mlx = @import("mlx.zig");
 const log = @import("log.zig");
 var kernels: [4]?mlx.mlx_fast_metal_kernel = @splat(null);
 var announced = false;
+var captured_routes: u32 = 0;
+
+/// Diagnostic only: save four real wide-prefill routing fixtures, then stop.
+/// Saving evaluates the router, so these runs must not be used for throughput.
+pub fn captureRoutes(a: std.mem.Allocator, indices: mlx.mlx_array, tokens: c_int) !void {
+    if (tokens < 2048 or captured_routes >= 4) return;
+    const prefix = std.c.getenv("QWEN4_MOE_CAPTURE_PATH") orelse return;
+    const path = try std.fmt.allocPrintSentinel(a, "{s}.{d}.safetensors", .{ std.mem.sliceTo(prefix, 0), captured_routes }, 0);
+    defer a.free(path);
+    const arrays = mlx.mlx_map_string_to_array_new();
+    defer _ = mlx.mlx_map_string_to_array_free(arrays);
+    const metadata = mlx.mlx_map_string_to_string_new();
+    defer _ = mlx.mlx_map_string_to_string_free(metadata);
+    try mlx.check(mlx.mlx_map_string_to_array_insert(arrays, "indices", indices));
+    try mlx.check(mlx.mlx_save_safetensors(path.ptr, arrays, metadata));
+    log.info("[moe-route-capture] fixture={d} tokens={d} synchronization_added=true\n", .{ captured_routes, tokens });
+    captured_routes += 1;
+}
 pub fn enabled() bool {
     const raw = std.c.getenv("MLX_SERVE_MOE_PREFILL_GROUP") orelse return false;
     return raw[0] == '1' and !mlx.noGpuBackend();
