@@ -697,5 +697,6 @@
     "mixed_control_drift_pct": 1.045510455104548,
     "target_2500_3000_reached": false,
     "target_1_5x_reached": false
-  }
+  },
+  "measured_mixed_driver_sha256": "d35da1a3bb38f169c5c1a9761fbde52da221d1f9f5e61bd7a1e0a7409b12699c"
 }

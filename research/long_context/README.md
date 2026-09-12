@@ -44,6 +44,6 @@ bash research/long_context/reproduce.sh \
 # The optional final argument selects the model; default is mixed-4-8bit.
 ```
 
-The site lock implements `acquire NAME` and `release NAME`; all GPU workloads must honor it. The measured runs used the pre-existing local `bench_prefill_current.py` wrapper. `reproduce.sh` is a portable version of the same launch/readiness/llmprobe sequence, syntax-checked without rerunning the model solely to validate this wrapper.
+The site lock implements `acquire NAME` and `release NAME`; all GPU workloads must honor it. The measured runs used the pre-existing local `bench_prefill_current.py` wrapper and `bench_prefill_mixed.py`, a copy changing only the model identifier. `reproduce.sh` is a portable version of the same launch/readiness/llmprobe sequence, syntax-checked without rerunning the model solely to validate this wrapper.
 
 The PR remains opt-in. Long-context throughput is not broad model-quality validation; paired-kernel startup fallback, planner admission accounting and broader HC numerical coverage are separate readiness items. Do not infer a >1.5× model speedup from earlier component benchmarks.
