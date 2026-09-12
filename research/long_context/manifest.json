@@ -31,10 +31,17 @@
     "ctx_size": 131072,
     "kv_quant": "off",
     "mtp": "default off; no --mtp launch flag, no MTP engagement in measured requests",
-    "pld": "shipping default on; long-request n-gram gate enabled. Kept identical across arms; do not describe these cells as PLD-off.",
+    "pld": "Launch/request intent default on, but effectively off: Qwen4 moduleSpecWiring -> specInitWiring(use_pld=false). No Generator [pld] trace suffix or PLD spec-stats in the measured logs.",
     "QWEN4_PLE_PAR": "16 set by driver but implementation absent from base, so no effect",
     "temperature": 0,
-    "decode_max_tokens": 192
+    "decode_max_tokens": 192,
+    "pld_source_evidence": {
+      "head": "092ce2e",
+      "transformer": "src/transformer.zig:15027-15047, qwen4 is shared-module state; moduleSpecWiring returns true",
+      "scheduler": "src/scheduler.zig:6374-6401, module wiring forces use_pld=false",
+      "generator": "src/generate.zig:2803, actual pld_active would add [pld] to every prefill trace",
+      "interpretation": "No PLD-on versus PLD-off prefill execution difference was established; prior prose described requested flags too loosely."
+    }
   },
   "model_fingerprint": {
     "config_sha256": "fe0b5952857299b31d75bedf1d8897faea14b4116a04c73a73152361e7788f59",

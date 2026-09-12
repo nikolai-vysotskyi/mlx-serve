@@ -1,0 +1,18 @@
+[args] model: 
+[args] drafter: <none>
+[args] serve: 127.0.0.1:11234, ctx-size=131072, pld=on, no-vision=false, prevent-sleep=true
+[args] kv-quant: off
+[args] kv-attn-mode: auto
+[args] serve: 127.0.0.1:11234
+  prompt=21 tokens, max_gen=12, ctx=131072
+  [prefill-trace] tokens=21 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=5ms eval=68ms last_token=1ms total=75ms
+  <- 21+1 tokens (147ms) [prefill: 222.5 tok/s, decode: 27.5 tok/s] [end_turn]
+  prompt=13515 tokens, max_gen=32, ctx=131072
+[hc-prefill] engaged: S=8192 B=1 pending=false
+[gdn-prefill] engaged: S=8192 B=1 cold=true
+[qsa-pair] engaged: S=8192 kv=8192 KB=512 B=1
+  [prefill-trace] tokens=13515 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=6767ms eval=5ms last_token=5ms total=6779ms
+  <- 13515+10 tokens (7041ms) [prefill: 1985.5 tok/s, decode: 46.3 tok/s] [stop]
+  prompt=15715 tokens, max_gen=32, ctx=131072
+  [prefill-trace] tokens=15715 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=7292ms eval=13ms last_token=1ms total=7308ms
+  <- 15715+10 tokens (7571ms) [prefill: 2141.6 tok/s, decode: 46.9 tok/s] [stop]

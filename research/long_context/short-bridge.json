@@ -1,0 +1,58 @@
+{
+  "date": "2026-09-12",
+  "kind": "One short two-request HTTP smoke on the recommended mixed checkpoint, not a new long-context A/B",
+  "head": "092ce2e",
+  "binary_sha256": "5d5cdc4a299b9a1f3efbd298c40f62ce3a82e1d30448a601b9e18deb1fce2130",
+  "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+  "machine": "M5 Max 128 GB",
+  "flags": {
+    "MLX_SERVE_QSA_PAIR": 1,
+    "MLX_SERVE_HC_PREFILL": 1,
+    "MLX_SERVE_GDN_PREFILL_FUSED": 1
+  },
+  "chunk": 8192,
+  "ctx": 131072,
+  "cache_entries": 0,
+  "kv_quant": "off",
+  "MTP": false,
+  "PLD": false,
+  "request_source": "tests/test_qsa_pair_prefill.py from 092ce2e, with --model explicitly set to the mixed checkpoint",
+  "rows": [
+    {
+      "prompt_tokens": 13515,
+      "server_prefill_tok_per_sec": 1985.5
+    },
+    {
+      "prompt_tokens": 15715,
+      "server_prefill_tok_per_sec": 2141.6
+    }
+  ],
+  "responses": [
+    {
+      "arm": "on",
+      "usage": {
+        "prompt_tokens": 13515,
+        "completion_tokens": 10,
+        "total_tokens": 13525,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "answer": "MAGNOLIA-7731"
+    },
+    {
+      "arm": "on",
+      "usage": {
+        "prompt_tokens": 15715,
+        "completion_tokens": 10,
+        "total_tokens": 15725,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "answer": "MAGNOLIA-7731"
+    }
+  ],
+  "driver_sha256": "f6ddc383c8f622129567353737d9491905372f72bf4c13907cffad01463e5b1e",
+  "log_sha256": "83f9fbf9e7b90ee7c78d9556809c426583db408cd895a862e2de0c3aef6cca0c"
+}
