@@ -1,0 +1,11 @@
+[qwen4-prof] ple gather S=8: 0.84 ms
+[qwen4-prof] ple gather S=20: 9.94 ms
+[qwen4-prof] ple gather S=8192: 1788.11 ms
+[qwen4-prof] S=8192 kv=8192 capture=false gdn 2446.251 ms (2446250 us, 36 layers, 67.951/layer) attn 961.176 ms (961176 us, 12 layers, 80.098/layer) ple-layer 1965.761 ms (1965760 us)
+[qwen4-prof] blocks (whole forward): ple 1899.832 ms / 1899831 us  hcRead 388.099 ms / 388098 us  gdn 930.176 ms / 930175 us  attn 477.507 ms / 477507 us  hcWrite 140.699 ms / 140698 us  mlp 1536.875 ms / 1536875 us
+[qwen4-prof] ple gather S=8192: 488.67 ms
+[qwen4-prof] S=8192 kv=16384 capture=false gdn 2489.732 ms (2489731 us, 36 layers, 69.159/layer) attn 1173.915 ms (1173915 us, 12 layers, 97.826/layer) ple-layer 614.330 ms (614329 us)
+[qwen4-prof] blocks (whole forward): ple 548.448 ms / 548448 us  hcRead 399.018 ms / 399018 us  gdn 976.005 ms / 976004 us  attn 616.964 ms / 616963 us  hcWrite 144.727 ms / 144726 us  mlp 1592.815 ms / 1592815 us
+[qwen4-prof] ple gather S=2334: 23.41 ms
+[qwen4-prof] S=2334 kv=18718 capture=false gdn 1469.863 ms (1469863 us, 36 layers, 40.830/layer) attn 381.654 ms (381654 us, 12 layers, 31.805/layer) ple-layer 63.112 ms (63112 us)
+[qwen4-prof] blocks (whole forward): ple 39.436 ms / 39436 us  hcRead 193.201 ms / 193200 us  gdn 348.885 ms / 348885 us  attn 181.845 ms / 181845 us  hcWrite 533.890 ms / 533890 us  mlp 617.372 ms / 617372 us

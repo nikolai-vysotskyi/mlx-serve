@@ -1,0 +1,75 @@
+{
+  "base_production_commit": "1b1a4dfbfd3d5f5c2bc9c4e61963902d5089d918",
+  "research_base_commit": "af8107f",
+  "binary_sha256": "c6a5fa966ee28cc451bc93202e1e8717ae20afa7463694974e59fa6dd942e283",
+  "source_sha256": {
+    "build.zig": "a672028dacaca01e38d1131bd7c46608f3e5535e8e58f9af210d4f63490e87cd",
+    "src/qwen4_exp.zig": "1c94652cc0bbe5456ed73fa31317cb466150efab9acaf7964c6aeadedc955ed1",
+    "src/transformer.zig": "24b0d46ab05edeebe21ce31bd012fc03b7831dc572771d36e0ed0a34a01b2953",
+    "src/ple_gpu_bridge.cpp": "1b83c346941b24610065c57f465caa9b26b08438e6d60108167628ea947b572a",
+    "src/kernels/ple_gpu.metal": "7de2c1d738784526a998995932e133daa1f25c826471397a03da5f4fc0a33832"
+  },
+  "machine": "M5 Max 128 GB",
+  "macOS": "26.5",
+  "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+  "chunk": 8192,
+  "context": 131072,
+  "cache_entries": 0,
+  "mtp": false,
+  "pld_effective": false,
+  "flags_common": {
+    "MLX_SERVE_QSA_PAIR": 1,
+    "MLX_SERVE_HC_PREFILL": 1,
+    "MLX_SERVE_GDN_PREFILL_FUSED": 1
+  },
+  "arms": {
+    "off": {
+      "MLX_SERVE_PLE_GPU": 0,
+      "prompt_tokens": [
+        13515,
+        15715
+      ],
+      "cached_tokens": [
+        0,
+        0
+      ],
+      "answers": [
+        "MAGNOLIA-7731",
+        "MAGNOLIA-7731"
+      ],
+      "server_prefill_tok_s": [
+        1553.8,
+        1987.7
+      ],
+      "stdout": "GPU acquired: codex-prefill-91666 (parent 91666)\n{\"chunk\": 8192, \"loaded_s\": 19.242258750000474, \"ready\": \"Paris\"}\n{\"arm\": \"on\", \"usage\": {\"prompt_tokens\": 13515, \"completion_tokens\": 10, \"total_tokens\": 13525, \"prompt_tokens_details\": {\"cached_tokens\": 0}}, \"answer\": \"MAGNOLIA-7731\"}\n{\"arm\": \"on\", \"usage\": {\"prompt_tokens\": 15715, \"completion_tokens\": 10, \"total_tokens\": 15725, \"prompt_tokens_details\": {\"cached_tokens\": 0}}, \"answer\": \"MAGNOLIA-7731\"}\nPASS: long prefill answers and expected QSA arm\nGPU released: codex-prefill-91666\n",
+      "engagement": [],
+      "server_log_sha256": "7ba992c47beeb74c90f8503b051bcfaf603125754253b81f6d852bad06be59f1"
+    },
+    "on": {
+      "MLX_SERVE_PLE_GPU": 1,
+      "prompt_tokens": [
+        13515,
+        15715
+      ],
+      "cached_tokens": [
+        0,
+        0
+      ],
+      "answers": [
+        "MAGNOLIA-7731",
+        "MAGNOLIA-7731"
+      ],
+      "server_prefill_tok_s": [
+        1001.8,
+        1075.6
+      ],
+      "stdout": "GPU acquired: codex-prefill-92084 (parent 92084)\n{\"chunk\": 8192, \"loaded_s\": 82.00888000000032, \"ready\": \"Paris\"}\n{\"arm\": \"on\", \"usage\": {\"prompt_tokens\": 13515, \"completion_tokens\": 10, \"total_tokens\": 13525, \"prompt_tokens_details\": {\"cached_tokens\": 0}}, \"answer\": \"MAGNOLIA-7731\"}\n{\"arm\": \"on\", \"usage\": {\"prompt_tokens\": 15715, \"completion_tokens\": 10, \"total_tokens\": 15725, \"prompt_tokens_details\": {\"cached_tokens\": 0}}, \"answer\": \"MAGNOLIA-7731\"}\nPASS: long prefill answers and expected QSA arm\nGPU released: codex-prefill-92084\n",
+      "engagement": [
+        "[ple-gpu] preparing zero-copy table: 32000153976 bytes (startup residency check)",
+        "[ple-gpu] ready: zero-copy table, startup parity passed",
+        "[ple-gpu] engaged: rows=131072 dim=160 affine4 gs32 BF16 exact packing"
+      ],
+      "server_log_sha256": "8d59e79ad8dddfe5d972bcf44015cb7ef8addae76c3acefcb2b2f9bc27f5a1a1"
+    }
+  }
+}

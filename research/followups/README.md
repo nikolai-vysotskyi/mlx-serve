@@ -1,6 +1,10 @@
 # Follow-up hypotheses on M5 Max, 2026-09-12
 
-Latest investigation: [resident gate/up/down fusion and the long-context QSA score/select budget](20260912-large-levers.md). Both candidates preserve the tested outputs but are slower; no full-model run or production change was made for them. Raw results and reproduction sources are retained here.
+Latest: [zero-copy GPU PLE](20260912-ple-gpu.md) achieved a ~36× warm standalone component ratio but **regressed the actual model** (1987.7 → 1075.6 tok/s at 15,715 tokens). The opt-in integration was removed; its patch and complete outcome are archived. Next investigate bounded selected-row caching/overlap, not whole-table GPU registration.
+
+Previous additional investigation: [expert grouping and direct-input MoE](20260912-moe-direct-pipeline.md), with a bit-exact 1.14× chain result that is insufficient for a long model run. [HC native inject correction](20260912-hc-native-inject.md) is in PR #408.
+
+Earlier investigation: [resident gate/up/down fusion and the long-context QSA score/select budget](20260912-large-levers.md). Both candidates preserve the tested outputs but are slower; no full-model run or production change was made for them. Raw results and reproduction sources are retained here.
 
 These are component investigations on the same MLX runtime as `../qsa_pair/provenance.json`. They do not establish the requested >1.5x full-model improvement. The production branch retains paired QSA, opt-in HC and wide GDN fusion, not the failed kernels below. Different files came from different microbenchmark runs; compare each run's own bracketed stock arms.
 

@@ -1,0 +1,28 @@
+{
+  "machine": "M5 Max 128 GB",
+  "macOS": "26.5",
+  "mlx_source": "1f8e74e3f12f31365464a6867c6579f0e9b29d85",
+  "libmlx_sha256": "c63811e0fe9afb5463f60137b6db913da0de73634cc736c8e06771a62b1db477",
+  "profile": {
+    "production_commit": "1b1a4dfbfd3d5f5c2bc9c4e61963902d5089d918",
+    "binary_sha256": "1727d9395720c1e7013f9b041dde44b5a1e38aea6b8a5662ea8a69ae61959382",
+    "prompt_tokens": 18719,
+    "chunk": 8192,
+    "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+    "profiling_overhead": "GPU sync per block; attribution only, no throughput comparison"
+  },
+  "file_sha256": {
+    "research/followups/moe-count-sort-prefix.metal": "3598e0fee83a789e57578073e258cafd0f1d2046228dfe0e65c420fce2753b51",
+    "research/followups/moe-count-sort-scatter.metal": "4d4b3e30f32c8236a001bb18e241d7939fddbea310ecd401bf05ce8c01c5675b",
+    "research/followups/moe-count-sort-count.metal": "8a38983124c7673b5bb8393b8186450edecc805a55db54a2a30359385c6de167",
+    "research/followups/moe-direct-input-gateup.metal": "df3320d8e6eb5e1de6543f3c4e052cc62b883d65eb73e37f4f8d9bd510e42ff7",
+    "research/followups/moe-direct-pipeline-small.jsonl": "aee4b67abb71b292f1085117226f82846fbc2d605e39680bf39d19a564972ca2",
+    "research/followups/moe-direct-low-occupancy-rejected.jsonl": "445ef01622fc9b0bb1977424abadf14c8f56f366691f507ebdbc58673bbafc82",
+    "research/followups/moe-direct-pipeline-probe.cpp": "98d9fe51087e6dc1e898fb5b5bf27d877ff8b9fd27366cf2ffd61e33945b42db",
+    "research/followups/moe-direct-reduce.metal": "aabcfb5b83a6ef50487bb3de0d9816a6a32ccd66645c55c09ca02e6ffe687770",
+    "research/followups/moe-direct-pipeline-unhoisted.jsonl": "4480b92621cf55d22672467a23b579d7c6a4a67e1f83ca4cde8a5aaf5a53c5bd",
+    "research/followups/moe-direct-pipeline-large.jsonl": "d0acacab4dc9e2bc2bda93266264a22b66f07a6b5f427d5b785e82bc64bafcbc",
+    "research/followups/20260912-moe-direct-pipeline.md": "940100f019c7b4da2016560132a40af313bb9fe84c2724030c5b26fea47c4102",
+    "research/followups/mixed-forward-profile.txt": "3e479202dbc14970d0cef1cd6a8c74c098570f6cd037ddf4662f22307395c224"
+  }
+}

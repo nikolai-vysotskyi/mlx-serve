@@ -4,6 +4,8 @@ Updated 2026-09-12. Implementation: paired QSA + HC + cold/warm GDN prefill fusi
 
 Current production head is **`1b1a4df`**: it removes HC inject reduction-order drift while retaining fused write/norm/mix. Dense-weight regression was red before and green after; ReleaseFast and the full suite passed. The mixed HTTP correctness/engagement smoke passed at 13,515 and 15,715 uncached tokens (2038.8 / 2436.7 tok/s server observations, **no matched OFF arm or speedup claim**). All long-context figures below belong to **previous head `092ce2e`**, not this correction. [Details and raw evidence](followups/20260912-hc-native-inject.md).
 
+Latest investigation: [GPU PLE](followups/20260912-ple-gpu.md) is a concrete example of a ~36× warm component result that **does not translate to model acceleration**: its 32-GB GPU-table integration made the same-binary HTTP test substantially slower and was removed. [MoE grouping + fused inverse/reduction](followups/20260912-moe-direct-pipeline.md) is bit-exact and about 1.14× for the measured expert chain, insufficient for a long model run. The next larger direction is bounded PLE row preparation/cache with overlap, combined with the useful MoE grouping; current target remains unmet.
+
 ## Objective and working style
 
 Use `ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit` for future reviewable model results: the maintainer requested this pack in [PR #375](https://github.com/ddalcu/mlx-serve/pull/375#issuecomment-5574309358). The original 4-bit cells below are retained as historical evidence. Never compare throughput across the two checkpoints as an optimization ratio.

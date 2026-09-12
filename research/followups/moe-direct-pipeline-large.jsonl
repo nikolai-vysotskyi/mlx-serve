@@ -1,0 +1,4 @@
+{"mode":0,"tokens":8192,"max_diff":0,"different_fraction":0,"median_ms":26.9177,"grouping_gather_expert_reduce_included":true}
+{"mode":1,"tokens":8192,"max_diff":0,"different_fraction":0,"median_ms":23.5255,"grouping_gather_expert_reduce_included":true}
+{"mode":2,"tokens":8192,"max_diff":0,"different_fraction":0,"median_ms":24.2075,"grouping_gather_expert_reduce_included":true}
+{"mode":0,"tokens":8192,"max_diff":0,"different_fraction":0,"median_ms":27.0064,"grouping_gather_expert_reduce_included":true}

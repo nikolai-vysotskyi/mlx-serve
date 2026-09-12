@@ -1,0 +1,13 @@
+{
+  "file_sha256": {
+    "research/followups/ple-mmap-gpu-probe.mm": "4bbcb808c56e5f7967de3ebd33f2a2cad9d0627ea9ebd67e94fa397e3858f2ae",
+    "research/followups/ple-mmap-gpu.metal": "8f9621ed265b622b93b6660720c6fdf066f0505d44e26159b185d6740839dfda",
+    "research/followups/ple-mmap-gpu.jsonl": "7d527754a045ddbd3b3789189e6745f475b05c711b497d7b96add5ee4acdf0d0",
+    "research/followups/ple-mlx-bridge-check.jsonl": "6ea5fca40fde1a36c87be06926a5b78f01bbf27b3c50b3b31ad7bdeca9671bae",
+    "research/followups/ple-gpu-integration.patch": "d5efc41bde0cff0703dfb60e352fa0712d80a56394bc26d783f3a6e728722cb5",
+    "research/followups/ple-gpu-http-ab.json": "c4e8825b1500ec522383c3218a49f4e97429bb95cd98f7799b6a12d1d1e39706",
+    "research/followups/20260912-ple-gpu.md": "b27f06bd184db7e635cb1968e9283a0f034f87650beacd252d3ddc7534254abe"
+  },
+  "model_run": "ple-gpu-http-ab.json",
+  "no_full_model_gain": true
+}

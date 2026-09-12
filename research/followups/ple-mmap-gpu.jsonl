@@ -1,0 +1,7 @@
+{"table_bytes":32000153976,"max_buffer_bytes":86586540032}
+{"wrap_ms":1.10292,"same_address":true,"device_allocated_bytes":32000229376}
+{"arm":"cpu_first","ms":4071.22}
+{"arm":"gpu_first","ms":7029.68,"bit_exact":true}
+{"arm":"cpu_warm","median_ms":53.3005,"bit_exact":true,"rows":131072,"dim":160}
+{"arm":"gpu_warm","median_ms":1.47779,"bit_exact":true,"rows":131072,"dim":160}
+{"arm":"cpu_warm","median_ms":53.1516,"bit_exact":true,"rows":131072,"dim":160}
