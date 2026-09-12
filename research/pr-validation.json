@@ -18,7 +18,8 @@
     },
     "release_binary_sha256": "5d5cdc4a299b9a1f3efbd298c40f62ce3a82e1d30448a601b9e18deb1fce2130",
     "http_evidence": "gdn_prefill/http-smoke.json; byte-identical production sources; research checkout binary",
-    "long_prompt_llmprobe_done": false
+    "long_prompt_llmprobe_done": true,
+    "long_prompt_evidence": "long_context/manifest.json; same frozen PR binary, original 4-bit A/B and recommended mixed-4-8bit A/B/A, three coding requests per cell"
   },
   "previous_qsa_hc": {
     "commit": "44bd600",

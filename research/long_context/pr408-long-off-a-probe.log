@@ -1,0 +1,83 @@
+занял GPU: codex-prefill-5700 (pid 5701)
+{"chunk": 8192, "loaded_s": 11.905737709021196, "ready": "Paris"}
+llmprobe v0.6.6 · probing http://127.0.0.1:11234
+
+  ✓ /v1/models               HTTP 200
+  ✓ chat/completions         HTTP 400
+  ✓ responses                HTTP 400
+  ✓ messages                 HTTP 400
+  ✗ messages/count_tokens    endpoint not found
+  ✓ embeddings               HTTP 400
+  ✓ completions (legacy)     HTTP 400
+  ✓ images/generations       HTTP 400
+  ✓ images/edits             HTTP 400
+  ✓ audio/speech             HTTP 400
+  ✗ audio/transcriptions     endpoint not found
+  ○ Ollama-compatible /api/chat detected, not scored
+  ○ Ollama-compatible /api/tags detected, not scored
+
+model: ddalcu/Qwen3.8-Flash-Next-MLX-Serve-4bit   depth: default   reasoning model — +1024 token headroom
+
+
+benchmarking (warmup + median of 3)...
+  decode length probe
+  decode length probe       discarded
+  decode warmup             discarded
+  decode 1/3                73.2 tok/s
+  decode 2/3                75 tok/s
+  decode 3/3                76.6 tok/s
+  prefill warmup            discarded
+  prefill 1/3               1921 tok/s
+  prefill 2/3               1720.3 tok/s
+  prefill 3/3               1780.3 tok/s
+  spec:predictable warmup   discarded
+  spec:predictable 1/3      76.8 tok/s
+  spec:predictable 2/3      75.8 tok/s
+  spec:predictable 3/3      77 tok/s
+  spec:novel warmup         discarded
+  spec:novel 1/3            76.9 tok/s
+  spec:novel 2/3            73.4 tok/s
+  spec:novel 3/3            69.1 tok/s
+  prefix cache cold
+  prefix cache warm
+  batching 1 stream
+  batching 4 streams
+  context calibrating
+  context ~65.5k 1/3
+  context ~65.5k ceiling 1/3
+  context ~65.5k 2/3
+  context ~65.5k ceiling 2/3
+  context ~65.5k 3/3
+  context ~65.5k ceiling 3/3
+      ~68.7k  61.4 tok/s decode · 1644 tok/s prefill · 41.8s first token · 1.02 tok/step
+  sustained load
+  benchmark used 430,530 tokens (425,819 in · 4,711 out) over 34 requests
+json report → <WORKSPACE>/outputs/pr408-long-off-a-llmprobe.json
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ llmprobe · http://127.0.0.1:11234/v1 · mlx-serve · ddalcu/Qwen3.8-Flash-Next-MLX-Serve-4bit
+ label pr408-long-off-a
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PERFORMANCE
+  informational — not scored; hardware-dependent, same-machine comparisons only
+  machine: Apple M5 Max · 128 GB · darwin arm64
+  sustained load: steady — 75 → 71.6 tok/s over 5m 20s (-4.5%)
+  decode length forced to 192 tokens (ignore_eos + min_tokens) — decode and drift figures compare equal work
+  ⚠ custom setup: 3 runs per scenario, rungs 64k — not comparable to default runs
+  Decode throughput     75 tok/s (73.2–76.6)
+  Time to first token   228 ms (219–236)
+  Prefill throughput    1780.3 tok/s (1720.3–1921)  (2042-token prompt)
+  Context scaling  decode · first-token latency · speculation vs prompt size
+    ~68.7k   61.4 tok/s   41.8s       1.02 tok/step · 1.01× ceiling · 1.02 tok/step at ceiling
+  Prefix cache          not detected  1× (1.1s cold → 1.1s warm)
+    usage reports 0 of 1541 prompt tokens cached
+  Concurrency (4)       partial  0.37 efficiency
+    91 tok/s aggregate vs 60.9 alone · slowest first token 1.1s
+  Speculative decode    1.05× — none detected
+    predictable 76.8 tok/s · novel 73.4 tok/s
+    1.01 tokens per decode step
+    (reasoning model — the thinking phase is novel, so this understates real gains)
+
+  430,894 tokens (426,154 in · 4,740 out) · 5m 35s
+отдал GPU: codex-prefill-5700

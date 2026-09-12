@@ -1,0 +1,256 @@
+# Filtered settings, engagement, prompt lengths and timing lines; no samples omitted.
+[args] model: 
+[args] drafter: <none>
+[args] serve: 127.0.0.1:11234, ctx-size=131072, pld=on, no-vision=false, prevent-sleep=true
+[args] kv-quant: off
+[args] kv-attn-mode: auto
+[args] serve: 127.0.0.1:11234
+[qsa-score] engaged (S=16 nb=700 layout=base nsg=4 nsh=22) — MLX_SERVE_QSA_SCORE_FUSED=0 restores the composed chain
+[qwen4] ngram table warm: done, 29.8 GB in 3.1 s (page cache; MLX_SERVE_NGRAM_WARM=0 disables)
+[qwen4] fused hyper-connection read engaged: hc=4 hidden=2560 lowrank=320 8-bit g64 (MLX_SERVE_HC_FUSED=0 restores the chain)
+[moe] fused router kernel engaged: mode=softmax E=512 K=10 tg=256
+[moe] fused gate+up+SwiGLU kernel engaged: E_topk=10 inter=640 bits=4 gs=64
+[moe] fused down+reduce kernel engaged: E_topk=10 inter=640 hidden=2560 bits=4 gs=64
+[moe] gather-qmv kernel engaged: E_topk=10 inter=640 hidden=2560 bits=4 gs=64
+[mlp] fused SwiGLU kernel engaged: n=640 tg=256
+[attn] fused QK-norm+RoPE (hd-256) engaged: hq=24 hk=2 S=1 rd=64
+[vqmm] NAX verify lane engaged at 8-bit: M=8 K=2560 N=10240 gs=64 min_m=7 (MLX_SERVE_VERIFY_QMM_NAX=0 restores stock)
+[nax-sdpa] engaged: stock fused sdpa (force_fused) serves hd-256 causal prefill and verify blocks > 8 rows; msv_attn_p256 causal arm declined (MLX_SERVE_NAX_SDPA=0 restores)
+[sdpa-split] engaged: qL=8 kL=8 Hq=24 Hkv=2 (MLX_SERVE_SDPA_SPLIT=0 restores the single dispatch)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+[admission] needed=658 MB available=36321 MB reclaimable=0 MB width=8192 verdict=admit
+  prompt=21 tokens, max_gen=12, ctx=131072
+[nax-sdpa] force_fused dispatch engaged: qL=20 kL=20 Hq=24 Hkv=2 hd=256
+[gdn] packed prework engaged: Hk=16 Hv=48 S=1 B=1
+[gdn] fused norm-gate engaged: Hv=48 S=1 gate=sigmoid
+  [prefill-trace] tokens=21 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=13ms eval=79ms last_token=1ms total=95ms
+  <- 21+1 tokens (173ms) [prefill: 174.5 tok/s, decode: 27.6 tok/s] [end_turn]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=26 tokens, max_gen=512, ctx=131072
+  spec-gate: ngram-score=0.000 (threshold=0.010)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+  [prefill-trace] tokens=26 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=9ms eval=99ms last_token=1ms total=110ms
+  <- 26+1 tokens (185ms) [prefill: 201.4 tok/s, decode: 25.7 tok/s] [stop]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=309 tokens, max_gen=512, ctx=131072
+  spec-gate: ngram-score=0.044 (threshold=0.010)
+  [prefill-trace] tokens=309 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=493ms eval=1ms last_token=1ms total=497ms
+  <- 309+28 tokens (1042ms) [prefill: 599.2 tok/s, decode: 55.1 tok/s] [stop]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=67 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.000 (threshold=0.010)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+  [prefill-trace] tokens=67 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=213ms eval=1ms last_token=1ms total=216ms
+  <- 67+192 tokens streamed [prefill: 285.6 tok/s, decode: 57.3 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=67 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.000 (threshold=0.010)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+  [prefill-trace] tokens=67 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=186ms eval=5ms last_token=2ms total=194ms
+  <- 67+192 tokens streamed [prefill: 316.4 tok/s, decode: 57.7 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=67 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.000 (threshold=0.010)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+  [prefill-trace] tokens=67 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=190ms eval=5ms last_token=1ms total=197ms
+  <- 67+192 tokens streamed [prefill: 310.1 tok/s, decode: 57.5 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=67 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.000 (threshold=0.010)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+  [prefill-trace] tokens=67 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=196ms eval=5ms last_token=1ms total=204ms
+  <- 67+192 tokens streamed [prefill: 300.4 tok/s, decode: 57.8 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=67 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.000 (threshold=0.010)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+  [prefill-trace] tokens=67 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=195ms eval=5ms last_token=1ms total=202ms
+  <- 67+192 tokens streamed [prefill: 303.0 tok/s, decode: 57.7 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=2042 tokens, max_gen=8, ctx=131072
+  spec-gate: ngram-score=0.302 (threshold=0.010)
+  pld=enabled (streaming, draft_len=5, key_len=3)
+  [prefill-trace] tokens=2042 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=1336ms eval=7ms last_token=4ms total=1349ms
+  <- 2042+1 tokens streamed [prefill: 1489.5 tok/s, decode: 25.5 tok/s] [stop]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=2042 tokens, max_gen=8, ctx=131072
+  spec-gate: ngram-score=0.302 (threshold=0.010)
+  pld=enabled (streaming, draft_len=5, key_len=3)
+  [prefill-trace] tokens=2042 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=1255ms eval=2ms last_token=1ms total=1260ms
+  <- 2042+1 tokens streamed [prefill: 1593.6 tok/s, decode: 26.0 tok/s] [stop]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=2042 tokens, max_gen=8, ctx=131072
+  spec-gate: ngram-score=0.302 (threshold=0.010)
+  pld=enabled (streaming, draft_len=5, key_len=3)
+  [prefill-trace] tokens=2042 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=1224ms eval=2ms last_token=1ms total=1228ms
+  <- 2042+1 tokens streamed [prefill: 1633.5 tok/s, decode: 26.6 tok/s] [stop]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=2042 tokens, max_gen=8, ctx=131072
+  spec-gate: ngram-score=0.302 (threshold=0.010)
+  pld=enabled (streaming, draft_len=5, key_len=3)
+  [prefill-trace] tokens=2042 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=1208ms eval=3ms last_token=1ms total=1213ms
+  <- 2042+1 tokens streamed [prefill: 1654.3 tok/s, decode: 26.7 tok/s] [stop]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=284 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.011 (threshold=0.010)
+  pld=enabled (streaming, draft_len=5, key_len=3)
+  [prefill-trace] tokens=284 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=437ms eval=2ms last_token=1ms total=442ms
+  <- 284+192 tokens streamed [prefill: 616.2 tok/s, decode: 57.1 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=283 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.011 (threshold=0.010)
+  pld=enabled (streaming, draft_len=5, key_len=3)
+  [prefill-trace] tokens=283 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=330ms eval=6ms last_token=1ms total=338ms
+  <- 283+192 tokens streamed [prefill: 791.4 tok/s, decode: 57.7 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=283 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.011 (threshold=0.010)
+  pld=enabled (streaming, draft_len=5, key_len=3)
+  [prefill-trace] tokens=283 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=323ms eval=6ms last_token=1ms total=331ms
+  <- 283+192 tokens streamed [prefill: 807.2 tok/s, decode: 57.5 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=283 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.011 (threshold=0.010)
+  pld=enabled (streaming, draft_len=5, key_len=3)
+  [prefill-trace] tokens=283 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=324ms eval=6ms last_token=1ms total=331ms
+  <- 283+192 tokens streamed [prefill: 807.2 tok/s, decode: 57.4 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=38 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.000 (threshold=0.010)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+  [prefill-trace] tokens=38 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=134ms eval=5ms last_token=1ms total=141ms
+  <- 38+163 tokens streamed [prefill: 237.5 tok/s, decode: 56.8 tok/s] [stop]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=38 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.000 (threshold=0.010)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+  [prefill-trace] tokens=38 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=125ms eval=5ms last_token=1ms total=132ms
+  <- 38+177 tokens streamed [prefill: 251.7 tok/s, decode: 56.8 tok/s] [stop]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=38 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.000 (threshold=0.010)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+  [prefill-trace] tokens=38 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=125ms eval=5ms last_token=1ms total=132ms
+  <- 38+160 tokens streamed [prefill: 252.0 tok/s, decode: 56.4 tok/s] [stop]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=38 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.000 (threshold=0.010)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+  [prefill-trace] tokens=38 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=126ms eval=5ms last_token=1ms total=134ms
+  <- 38+184 tokens streamed [prefill: 248.6 tok/s, decode: 55.8 tok/s] [stop]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=1541 tokens, max_gen=8, ctx=131072
+  spec-gate: ngram-score=0.131 (threshold=0.010)
+  pld=enabled (streaming, draft_len=5, key_len=3)
+  [prefill-trace] tokens=1541 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=941ms eval=7ms last_token=1ms total=951ms
+  <- 1541+1 tokens streamed [prefill: 1587.2 tok/s, decode: 25.9 tok/s] [stop]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=1541 tokens, max_gen=8, ctx=131072
+  spec-gate: ngram-score=0.131 (threshold=0.010)
+  pld=enabled (streaming, draft_len=5, key_len=3)
+  [prefill-trace] tokens=1541 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=966ms eval=2ms last_token=1ms total=971ms
+  <- 1541+1 tokens streamed [prefill: 1552.5 tok/s, decode: 25.7 tok/s] [stop]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=50 tokens, max_gen=96, ctx=131072
+  spec-gate: ngram-score=0.000 (threshold=0.010)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+  [prefill-trace] tokens=50 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=182ms eval=1ms last_token=1ms total=185ms
+  <- 50+96 tokens streamed [prefill: 243.8 tok/s, decode: 57.0 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  pld=enabled (draft_len=5, key_len=3)
+  pld=enabled (draft_len=5, key_len=3)
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=50 tokens, max_gen=96, ctx=131072
+  prompt=50 tokens, max_gen=96, ctx=131072
+  spec-gate: ngram-score=0.000 (threshold=0.010)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+  prompt=50 tokens, max_gen=96, ctx=131072
+  spec-gate: ngram-score=0.000 (threshold=0.010)
+  spec-gate: ngram-score=0.000 (threshold=0.010)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+  prompt=50 tokens, max_gen=96, ctx=131072
+  spec-gate: ngram-score=0.000 (threshold=0.010)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+  [prefill-trace] tokens=50 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=147ms eval=2ms last_token=1ms total=152ms
+  [prefill-trace] tokens=50 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=156ms eval=1ms last_token=1ms total=159ms
+[batched] gdn batched decode engaged (slots=2)
+  [prefill-trace] tokens=50 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=155ms eval=1ms last_token=2ms total=159ms
+  [prefill-trace] tokens=50 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=149ms eval=1ms last_token=1ms total=153ms
+  <- 50+96 tokens streamed [prefill: 293.1 tok/s, decode: 28.9 tok/s] [length]
+  <- 50+96 tokens streamed [prefill: 280.8 tok/s, decode: 28.6 tok/s] [length]
+  <- 50+96 tokens streamed [prefill: 282.0 tok/s, decode: 28.6 tok/s] [length]
+  <- 50+96 tokens streamed [prefill: 292.8 tok/s, decode: 28.5 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=694 tokens, max_gen=1, ctx=131072
+  spec-gate: ngram-score=0.160 (threshold=0.010)
+  pld=enabled (streaming, draft_len=5, key_len=3)
+  [prefill-trace] tokens=694 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=734ms eval=6ms last_token=2ms total=743ms
+  <- 694+1 tokens streamed [prefill: 907.7 tok/s, decode: 43.3 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=68651 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.821 (threshold=0.010)
+  pld=enabled (streaming, draft_len=5, key_len=3)
+[qsa] sparse attention engaged: kv=8192 blocks=2048 top-512 (budget 2048, ratio 4)
+[qsa-select] engaged (S=8192 nb=2048 k=512 tg=256) — MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain
+[qsa-fused] engaged: msv_attn_p256 mask arm qL=8192 kL=8192 Hq=24 Hkv=2 (MLX_SERVE_QSA_FUSED=0 restores stock sdpa)
+[qsa-gather] engaged: msv_qsa_nax_precise S=8192 kv=16384 blocks=512 bk=32 tgmem=20992 (MLX_SERVE_QSA_NAX=0 restores the stock gather)
+[qsa-score] engaged (S=1 nb=17162 layout=base nsg=4 nsh=537) — MLX_SERVE_QSA_SCORE_FUSED=0 restores the composed chain
+[qsa-select] engaged (S=1 nb=17162 k=512 tg=1024) — MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain
+[qsa-decode-gather] engaged (S=1 kv=68651 rows=2051) (MLX_SERVE_QSA_DECODE_GATHER=0 restores the dense mask arm)
+  [prefill-trace] tokens=68651 chunks=9 chunk_size=8192 chunk_widths=8192..8192 chunked=41697ms eval=70ms last_token=5ms total=41773ms
+  [qsa-arms] qsa=decode_gather calls=2424 mask=12 decode=2316 verify=0 prefill=96
+  <- 68651+192 tokens streamed [prefill: 1642.4 tok/s, decode: 50.1 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=68618 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.832 (threshold=0.010)
+  pld=enabled (streaming, draft_len=5, key_len=3)
+  [prefill-trace] tokens=68618 chunks=9 chunk_size=8192 chunk_widths=8192..8192 chunked=41473ms eval=65ms last_token=1ms total=41541ms
+  [qsa-arms] qsa=decode_gather calls=2424 mask=12 decode=2316 verify=0 prefill=96
+  <- 68618+192 tokens streamed [prefill: 1650.7 tok/s, decode: 51.3 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=68651 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.821 (threshold=0.010)
+  pld=enabled (streaming, draft_len=5, key_len=3)
+  [prefill-trace] tokens=68651 chunks=9 chunk_size=8192 chunk_widths=8192..8192 chunked=41603ms eval=65ms last_token=1ms total=41671ms
+  [qsa-arms] qsa=decode_gather calls=2424 mask=12 decode=2316 verify=0 prefill=96
+  <- 68651+192 tokens streamed [prefill: 1646.5 tok/s, decode: 50.7 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=68618 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.832 (threshold=0.010)
+  pld=enabled (streaming, draft_len=5, key_len=3)
+  [prefill-trace] tokens=68618 chunks=9 chunk_size=8192 chunk_widths=8192..8192 chunked=41592ms eval=66ms last_token=1ms total=41661ms
+  [qsa-arms] qsa=decode_gather calls=2424 mask=12 decode=2316 verify=0 prefill=96
+  <- 68618+192 tokens streamed [prefill: 1646.1 tok/s, decode: 51.2 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=68651 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.821 (threshold=0.010)
+  pld=enabled (streaming, draft_len=5, key_len=3)
+  [prefill-trace] tokens=68651 chunks=9 chunk_size=8192 chunk_widths=8192..8192 chunked=41635ms eval=66ms last_token=1ms total=41704ms
+  [qsa-arms] qsa=decode_gather calls=2424 mask=12 decode=2316 verify=0 prefill=96
+  <- 68651+192 tokens streamed [prefill: 1645.2 tok/s, decode: 50.6 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=68618 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.832 (threshold=0.010)
+  pld=enabled (streaming, draft_len=5, key_len=3)
+  [prefill-trace] tokens=68618 chunks=9 chunk_size=8192 chunk_widths=8192..8192 chunked=41560ms eval=66ms last_token=1ms total=41628ms
+  [qsa-arms] qsa=decode_gather calls=2424 mask=12 decode=2316 verify=0 prefill=96
+  <- 68618+192 tokens streamed [prefill: 1647.3 tok/s, decode: 51.0 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=66 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.000 (threshold=0.010)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+  [prefill-trace] tokens=66 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=991ms eval=1ms last_token=1ms total=994ms
+  <- 66+192 tokens streamed [prefill: 64.9 tok/s, decode: 56.5 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=66 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.000 (threshold=0.010)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+  [prefill-trace] tokens=66 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=182ms eval=6ms last_token=1ms total=190ms
+  <- 66+192 tokens streamed [prefill: 317.1 tok/s, decode: 57.8 tok/s] [length]
+  pld=enabled (draft_len=5, key_len=3)
+  prompt=66 tokens, max_gen=192, ctx=131072
+  spec-gate: ngram-score=0.000 (threshold=0.010)
+  pld=disabled (ngram-score=0.000 < gate threshold 0.010)
+  [prefill-trace] tokens=66 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=190ms eval=5ms last_token=1ms total=197ms
+  <- 66+192 tokens streamed [prefill: 307.3 tok/s, decode: 57.6 tok/s] [length]

@@ -4,7 +4,9 @@ Updated 2026-09-12. Implementation: paired QSA + HC + cold/warm GDN prefill fusi
 
 ## Objective and working style
 
-The user's objective remains **>1.5× whole-model prefill on M5 Max 128 GB**, with the same model quality. Their stated clean-main baseline is 1868 tok/s; >1.5× means **>2802 tok/s**. The broader requested range is 2500–3000 tok/s. The latest short HTTP result reaches **2509.4 tok/s at 15,715 prompt tokens**. The strict >1.5× target and long-context throughput have **not** been validated by this branch.
+Use `ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit` for future reviewable model results: the maintainer requested this pack in [PR #375](https://github.com/ddalcu/mlx-serve/pull/375#issuecomment-5574309358). The original 4-bit cells below are retained as historical evidence. Never compare throughput across the two checkpoints as an optimization ratio.
+
+The user's objective remains **>1.5× whole-model prefill on M5 Max 128 GB**, with the same model quality. Their stated clean-main baseline is 1868 tok/s; >1.5× means **>2802 tok/s**. The broader requested range is 2500–3000 tok/s. The latest short HTTP result reaches **2509.4 tok/s at 15,715 prompt tokens**. Long-context llmprobe now measures 1644 → 1775 tok/s on the original pack and 1626 / 1643 → 1879 tok/s on the recommended mixed pack. **The 2500–3000 tok/s and >1.5× long-context targets remain unmet.** See `long_context/README.md`.
 
 Continue investigating and implementing autonomously. The user authorized code changes, reversible local experiments, GitHub issue updates, PRs when ready, and relevant maintainer pings when there are concrete results. Do not stop to ask whether to continue or whether to implement a promising idea. Follow the execution environment's actual permissions and the repository's contribution rules.
 
@@ -58,6 +60,22 @@ That is **+4.75% incremental** on the warmed request. The on log confirms cold f
 
 The driver sets `QWEN4_PLE_PAR=16`, but PR #375's implementation is absent from this source base, so that setting has no effect here. Its previously reported +3.3% has not been measured together with these changes and must not be added to this result.
 
+## Confirmed long-context llmprobe comparison
+
+| Checkpoint / arm | Input tokens | Long prefill tok/s |
+|---|---:|---:|
+| Original 4-bit, off | 68,651 | **1644** |
+| Original 4-bit, on | 68,447 | **1775** |
+| Mixed 4/8-bit, off A | 68,447 | **1626** |
+| Mixed 4/8-bit, on | 68,539 | **1879** |
+| Mixed 4/8-bit, off B | 68,651 | **1643** |
+
+Original 4-bit: **+7.97%**. Recommended mixed checkpoint: **+14.36% to +15.56%** against the two bracketing disabled controls. The two mixed controls differ by **+1.05%**. Each cell is a median of three long coding requests; the harness also sends three separate predictable-ceiling requests per boot.
+
+**The earlier 2509.4 tok/s at 15,715 tokens was not reproduced at 64K+ context. Neither the 2500–3000 tok/s target nor >1.5× whole-prefill speedup is established.** The different checkpoint, prompt, length and PLD settings prevent treating the earlier short HTTP cell as the long-context result. The controls here are the frozen PR binary with the three opt-ins disabled, based on fa76a4b; they are not the user's historical 1868 tok/s measurement.
+
+Settings, model/header and runtime fingerprints, raw reports, engagement excerpts and the portable reproduction script are in `long_context/`. The recommended mixed model was tested in off/on/off order following the maintainer request in PR #375. All arms used explicit chunk8192, context131072, prefix cache entries0, KV quant off, MTP default off and PLD default on. The standard llmprobe nonce produces a small documented token-count mismatch; prompt bytes are not identical across boots.
+
 ## Validation already performed
 
 - ReleaseFast server builds passed on this Mac, including the final first-chunk dispatcher: 7/7 build steps.
@@ -67,7 +85,7 @@ The driver sets `QWEN4_PLE_PAR=16`, but PR #375's implementation is absent from 
 - Repeated two-shape HTTP runs on the built server passed. The final on arm logs `[qsa-pair] engaged: S=8192 kv=8192`; disabled control logs the existing NAX gather.
 - **Full suite passed on the clean PR worktree including GDN:** 9/9 steps, 2329 executed tests passed, 154 skipped, 0 failed; the separate helper test executable was cached from its earlier successful run. GDN focused checks cover cold/history, B2, folded offsets, wide S17/65/513 and both norm-gate formulas. `pr-validation.json` identifies build results and exact production-source hashes; its earlier checkpoint covers QSA+HC before GDN.
 - **Draft PR:** https://github.com/ddalcu/mlx-serve/pull/408 . It contains only the eight production/test files; component probes and research logs remain on this research branch.
-- **Not done:** dedicated paired-kernel startup probe/fallback, planner-memory admission accounting, broad HC/model-quality validation, and final long-prompt same-session llmprobe A/B. The PR stays draft.
+- **Not done:** dedicated paired-kernel startup probe/fallback, planner-memory admission accounting, broad HC/model-quality validation. The long-prompt comparison is now done. The PR stays draft for the remaining kernel/numerical readiness work.
 
 Before a PR, read `CONTRIBUTING.md`, `CLAUDE.md`, relevant engine gotchas and `.claude/skills/bench/SKILL.md`. The repository prohibits even a draft PR until that exact tree builds and its full Zig suite passes on a real Apple Silicon Mac in the session. A performance claim in a PR needs the prescribed llmprobe comparison. Keep research logs and discarded prototypes out of the eventual small production PR.
 
@@ -96,7 +114,7 @@ python3 tests/test_qsa_pair_prefill.py --url http://127.0.0.1:11234 \
 
 Start a fresh disabled server for `--pair off --hc off --gdn off` without `--first-chunk`. The script uses fixed public-source snippets, disables MTP/PLD, checks uncached usage and the actual kernel engagement after its requests. Never terminate another person's server to obtain a port or GPU. Use the site's existing exclusive GPU lock and release it in cleanup.
 
-For eventual long-prompt proof, freeze prompt bytes/token counts, model, context, KV dtype, cache policy, speculative settings, runtime, chunking and binary SHA. Use the same final binary's flags for isolation and identify the clean base separately. Measure prompt prefill, not decode speed or streaming delivery latency. Warm both arms equivalently; use the context-scaling rung in llmprobe, not its unrelated short-prefill headline. Run one justified A/B and the necessary confirmation, not a long sweep of speculative parameter combinations.
+For any future long-prompt comparison, freeze prompt bytes/token counts, model, context, KV dtype, cache policy, speculative settings, runtime, chunking and binary SHA. Use the same final binary's flags for isolation and identify the clean base separately. Measure prompt prefill, not decode speed or streaming delivery latency. Warm both arms equivalently; use the context-scaling rung in llmprobe, not its unrelated short-prefill headline. Run one justified A/B and the necessary confirmation, not a long sweep of speculative parameter combinations.
 
 ## Do not repeat these rejected directions blindly
 
@@ -114,4 +132,4 @@ Do not assume ordinary hosted macOS CI is an M5 Max with 128 GB or that it holds
 
 Existing discussion: https://github.com/ddalcu/mlx-serve/issues/366 . The paired kernel and HC component results, code links and short combined results are recorded there. Prefer updating this issue to creating duplicates.
 
-Latest measured update: [2509.4 tok/s short HTTP and GDN PR addition](https://github.com/ddalcu/mlx-serve/issues/366#issuecomment-5643393131). Subsequent mixed-PV, coarse-softmax and cached-dense-HC probes are recorded in `followups/README.md`; none improved the accepted implementation with demonstrated numerical validity.
+Earlier short measured update: [2509.4 tok/s short HTTP and GDN PR addition](https://github.com/ddalcu/mlx-serve/issues/366#issuecomment-5643393131). Subsequent mixed-PV, coarse-softmax and cached-dense-HC probes are recorded in `followups/README.md`; none improved the accepted implementation with demonstrated numerical validity.
