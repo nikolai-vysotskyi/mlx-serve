@@ -13,6 +13,10 @@ clang++ -O3 -std=c++20 -mmacosx-version-min=26.3 research/hc_prefill/probe.cpp -
 /tmp/hc-prefill-probe
 ```
 
-The kernel currently requires H2560, HC4, BF16, contiguous data and the fixed benchmark geometry. Integration must retain the dense inject GEMM fallback for unsupported weights/shapes. Deferral must flush around PLE/capture/eval boundaries, as the existing decode fusion does. Synchronized block profiling flushes the pending write and would hide this particular fusion: use a normal forward for throughput.
+The server integration in `src/hc_prefill.zig` is opt-in with `MLX_SERVE_HC_PREFILL=1`, defaults off, and requires H2560, HC4, BF16, B1..2 and S17..8192. Other shapes retain the original chain. Pending writes flush around PLE/capture/eval boundaries. Synchronized block profiling flushes the pending write and would hide this particular fusion: use a normal forward for throughput.
+
+ReleaseFast build passed (7/7 steps). Focused Zig test passed (9/9 build steps, 3/3 executed tests): B2/S17 and B1/S65, with and without a pending write; exact write, normalization, one-hot inject mapping and BF16 mix. The full suite has not been run; this branch remains research, with no PR yet.
+
+Both flags together were exercised through HTTP with two different prompt lengths and two requests per server. Both enabled/disabled arms returned the correct passphrase, with no cached prompt tokens. `http-smoke.json` records the settings and engagement lines. The second, warmed request (15,715 tokens) reported 1953.6 -> 2166.7 tok/s (+10.9%). The first (13,515 tokens, includes cold work) was 1751.4 -> 1770.2. These are server-reported smoke measurements, not llmprobe or a 65K target validation. No >1.5× whole-model claim follows. The user baseline 1868 tok/s is not the denominator for these shorter requests.
 
 Related failed experiment: fusing the up GEMM itself with mixing gave 3.2125 ms versus 2.61571 ms for the stock up+mix subchain. Keep the native projection and fuse the surrounding operations instead.

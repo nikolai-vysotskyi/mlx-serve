@@ -1,0 +1,65 @@
+{
+  "base": "fa76a4b50b3f54af7e9cd927279f5ba2870f02c6",
+  "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-4bit",
+  "machine": "Apple M5 Max 128 GB",
+  "chunk": 8192,
+  "kv_quant": "off",
+  "cache_entries": 0,
+  "MTP": false,
+  "PLD": false,
+  "metric": "server-reported prompt prefill tok/s",
+  "purpose": "two-shape HTTP integration smoke, NOT llmprobe or 65K target validation",
+  "arms": {
+    "on": {
+      "flags": {
+        "MLX_SERVE_QSA_PAIR": 1,
+        "MLX_SERVE_HC_PREFILL": 1
+      },
+      "engagement": [
+        "[hc-prefill] engaged: S=8192 B=1 pending=false",
+        "[qsa-pair] engaged: S=5322 kv=13514 KB=512 B=1"
+      ],
+      "requests": [
+        {
+          "tokens": 13515,
+          "generated": 10,
+          "prefill_tok_s": 1770.2
+        },
+        {
+          "tokens": 15715,
+          "generated": 10,
+          "prefill_tok_s": 2166.7
+        }
+      ],
+      "answers": [
+        "MAGNOLIA-7731",
+        "MAGNOLIA-7731"
+      ]
+    },
+    "off": {
+      "flags": {
+        "MLX_SERVE_QSA_PAIR": 0,
+        "MLX_SERVE_HC_PREFILL": 0
+      },
+      "engagement": [
+        "[qsa-gather] engaged: msv_qsa_nax_precise S=5322 kv=13514 blocks=512 bk=32 tgmem=20992 (MLX_SERVE_QSA_NAX=0 restores the stock gather)"
+      ],
+      "requests": [
+        {
+          "tokens": 13515,
+          "generated": 10,
+          "prefill_tok_s": 1751.4
+        },
+        {
+          "tokens": 15715,
+          "generated": 10,
+          "prefill_tok_s": 1953.6
+        }
+      ],
+      "answers": [
+        "MAGNOLIA-7731",
+        "MAGNOLIA-7731"
+      ]
+    }
+  }
+}
