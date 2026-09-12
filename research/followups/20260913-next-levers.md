@@ -25,4 +25,21 @@ Next: real-model routing fixtures (four first wide MoE calls) and their complete
 
 The captured first/fourth wide MoE calls used496/486 distinct experts and a maximum1055/4296 rows for one expert, unlike the uniform fixture. Replaying those routes still improved the inclusive component from roughly29.57/30.20 to25.64/25.93ms, with exact BF16 outputs on the synthetic weights/activations. Therefore **routing skew alone does not explain the model regression**. Swapping in the exact production reduction source gave25.99ms versus25.97ms for the equivalent research source, also exact; a prototype-to-production reduction discrepancy was not reproduced. The remaining work is attribution on the complete live graph (actual expert weights/activation, compiled activation and neighboring work), not another tile-size sweep. No model throughput gain is inferred from these component checks.
 
-The capture run uses an extra router synchronization and is explicitly diagnostic. It returned the expected passphrase, but its throughput number is excluded. Fixture provenance and the complete outputs are beside this report.
+The capture run uses an extra router synchronization and is explicitly diagnostic. It returned the expected passphrase, but its throughput number is excluded. Fixture provenance and component measurements are beside this report. The raw routing arrays are kept local; regenerate them with the command below.
+
+
+## Regenerate routing fixtures locally
+
+```sh
+PREFILL_CAPTURE_ROUTES=1 PLE_BENCH_ARMS=current PLE_BENCH_TAG=route-capture \
+  python3 research/followups/bench-prefill-combined.py \
+  --binary zig-out/bin/mlx-serve --out /tmp/qwen-route-capture --lock /path/to/gpu_lock.sh
+clang++ -O3 -std=c++20 -mmacosx-version-min=26.3 \
+  research/followups/moe-wide-register-probe.cpp -I lib/mlx-src \
+  -L lib/mlx/lib -lmlx -Wl,-rpath,"$PWD/lib/mlx/lib" -o /tmp/moe-route-probe
+/path/to/gpu_lock.sh acquire route-replay
+/tmp/moe-route-probe large /tmp/qwen-route-capture/routes.3.safetensors
+/path/to/gpu_lock.sh release route-replay
+```
+
+Run acquire/probe/release in one shell parent, preferably with a cleanup trap. This uses the installed mixed pack and public-source benchmark prompt. Route capture synchronizes and is a diagnostic. Only code, aggregate timing/error measurements and ordinary benchmark logs are published here; the raw model-derived routing arrays are not distributed.
