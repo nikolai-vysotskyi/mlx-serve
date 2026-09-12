@@ -1,0 +1,12 @@
+{"shape":"gdn_in","M":8192,"K":2560,"N":16384,"bits":8,"group_size":64,"mode":0,"median_ms":16.8975,"max_diff":0,"different_fraction":0,"actual_checkpoint_weights":true}
+{"shape":"gdn_in","M":8192,"K":2560,"N":16384,"bits":8,"group_size":64,"mode":1,"median_ms":11.6807,"max_diff":0,"different_fraction":0,"actual_checkpoint_weights":true}
+{"shape":"gdn_in","M":8192,"K":2560,"N":16384,"bits":8,"group_size":64,"mode":2,"median_ms":11.4705,"max_diff":0,"different_fraction":0,"actual_checkpoint_weights":true}
+{"shape":"gdn_in","M":8192,"K":2560,"N":16384,"bits":8,"group_size":64,"mode":0,"median_ms":13.1024,"max_diff":0,"different_fraction":0,"actual_checkpoint_weights":true}
+{"shape":"gdn_out","M":8192,"K":6144,"N":2560,"bits":8,"group_size":64,"mode":0,"median_ms":5.07775,"max_diff":0,"different_fraction":0,"actual_checkpoint_weights":true}
+{"shape":"gdn_out","M":8192,"K":6144,"N":2560,"bits":8,"group_size":64,"mode":1,"median_ms":4.8435,"max_diff":0,"different_fraction":0,"actual_checkpoint_weights":true}
+{"shape":"gdn_out","M":8192,"K":6144,"N":2560,"bits":8,"group_size":64,"mode":2,"median_ms":4.35417,"max_diff":0,"different_fraction":0,"actual_checkpoint_weights":true}
+{"shape":"gdn_out","M":8192,"K":6144,"N":2560,"bits":8,"group_size":64,"mode":0,"median_ms":5.09242,"max_diff":0,"different_fraction":0,"actual_checkpoint_weights":true}
+{"shape":"attn_q","M":8192,"K":2560,"N":12288,"bits":8,"group_size":64,"mode":0,"median_ms":9.84329,"max_diff":0,"different_fraction":0,"actual_checkpoint_weights":true}
+{"shape":"attn_q","M":8192,"K":2560,"N":12288,"bits":8,"group_size":64,"mode":1,"median_ms":8.60417,"max_diff":0,"different_fraction":0,"actual_checkpoint_weights":true}
+{"shape":"attn_q","M":8192,"K":2560,"N":12288,"bits":8,"group_size":64,"mode":2,"median_ms":8.47338,"max_diff":0,"different_fraction":0,"actual_checkpoint_weights":true}
+{"shape":"attn_q","M":8192,"K":2560,"N":12288,"bits":8,"group_size":64,"mode":0,"median_ms":9.952,"max_diff":0,"different_fraction":0,"actual_checkpoint_weights":true}

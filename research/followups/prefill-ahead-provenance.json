@@ -1,0 +1,14 @@
+{
+  "upstream": "fa76a4b50b3f54af7e9cd927279f5ba2870f02c6",
+  "research_parent": "912ebc8",
+  "mlx_source": "1f8e74e3f12f31365464a6867c6579f0e9b29d85",
+  "ple_ahead_runtime_sources_sha256": {
+    "src/transformer.zig": "57fb53143b306e89af79d65ae247958b6b8ffb1dfe13ea7a3abfe16329d305b7",
+    "src/generate.zig": "b3b0b5edb30b9b2d8f209a182a6d2c98c50f139d9329a6d46a8452b5ac3ec3a0",
+    "src/ple_packed.zig": "b2ccffd830b95489d171a9f4f4d6ab62c931600d29dd3bc34c370d977feddf6b",
+    "src/kernels/ple_packed.metal": "fd5a2afc0d4b801b625e75fa112aaf8558d602164091065849fd836abe8dc543"
+  },
+  "measured_binary_sha256": "8e3eceadab95651e86640bd3613920d476464fe5b1ceb49f01efb24069849d18",
+  "archived_patch_sha256": "ec1814ee9c3a866ec50da01f194eafb2d226e6d890314777a02ee4e1a9fd0ff1",
+  "current_source_note": "Adds an unmeasured, separately disabled MoE grouping opt-in after the frozen PLE measurement."
+}

@@ -4,7 +4,7 @@ Updated 2026-09-12. Implementation: paired QSA + HC + cold/warm GDN prefill fusi
 
 Current production head is **`1b1a4df`**: it removes HC inject reduction-order drift while retaining fused write/norm/mix. Dense-weight regression was red before and green after; ReleaseFast and the full suite passed. The mixed HTTP correctness/engagement smoke passed at 13,515 and 15,715 uncached tokens (2038.8 / 2436.7 tok/s server observations, **no matched OFF arm or speedup claim**). All long-context figures below belong to **previous head `092ce2e`**, not this correction. [Details and raw evidence](followups/20260912-hc-native-inject.md).
 
-Latest investigation: [GPU PLE](followups/20260912-ple-gpu.md) is a concrete example of a ~36× warm component result that **does not translate to model acceleration**: its 32-GB GPU-table integration made the same-binary HTTP test substantially slower and was removed. [MoE grouping + fused inverse/reduction](followups/20260912-moe-direct-pipeline.md) is bit-exact and about 1.14× for the measured expert chain, insufficient for a long model run. The next larger direction is bounded PLE row preparation/cache with overlap, combined with the useful MoE grouping; current target remains unmet.
+Latest investigation: [bounded PLE preparation ahead + MoE grouping](followups/20260912-prefill-ahead-and-grouping.md). The matched 62,176-token HTTP screening is **2071.3 → 2154.0 tok/s (+3.99%)**, with unchanged recall and no cached prompt tokens; the short request did not improve. This is one pair, not a >1.5× result. The producer reduced long-request CPU waiting to 6.44 ms. Lightweight timing also showed that the older synchronous profile overstated the steady PLE budget. A compatible native-projection MoE grouping/reduction path is now opt-in runtime code, with no measured combined throughput claim.
 
 ## Objective and working style
 
@@ -38,7 +38,7 @@ MLX_SERVE_QSA_PAIR=1 MLX_SERVE_HC_PREFILL=1 MLX_SERVE_GDN_PREFILL_FUSED=1 \
 
 Do not set `MLX_SERVE_QSA_GATHER_MIN_KV` for the new automatic dispatcher. Setting it to 8192 intentionally restores the legacy crossover. Set all three optimization flags to 0 for the same-binary disabled control.
 
-## Current live result: short HTTP comparison
+## Historical short HTTP comparison (4-bit checkpoint)
 
 M5 Max 128 GB, macOS 26.5, model `ddalcu/Qwen3.8-Flash-Next-MLX-Serve-4bit`, base fa76a4b, server MLX source `1f8e74e3f12f31365464a6867c6579f0e9b29d85`. Same final binary, chunk8192, prefix cache entries0, KV quant off, MTP/PLD off in the request.
 
@@ -145,3 +145,9 @@ Earlier short measured update: [2509.4 tok/s short HTTP and GDN PR addition](htt
 ## PLE regression investigation and bounded staging (2026-09-12)
 
 [Latest diagnostic report](followups/20260912-ple-residency-investigation.md): old GPU integration skipped native CPU warming and registered the entire 32 GB table. Three-row first use caused almost 32 GB of page-ins. A separate-queue prototype exposed 3265 ms command time versus 0.266 ms GPU time but failed model recall; it is not accepted. The successor leaves the table on the CPU and stages at most 13.1 MB of selected compressed rows: 16.54 ms versus 54.25–54.74 ms C++ reference, all 20.97 million BF16 elements exact. This is a component result, with no model throughput claim. Next work is bounded staging in the normal MLX graph and future-chunk preparation, combined with full MoE and actual mixed 8-bit projection improvements. See the report for cold/warm caveats and reproduction. Production PR remains at `1b1a4df`; archived diagnostic source is not active runtime code.
+
+## Latest runtime research flags
+
+`MLX_SERVE_PLE_PACKED=1 MLX_SERVE_PLE_AHEAD=1` enables bounded selected-row preparation in the normal MLX graph, with a CPU producer, two queued chunks and a request-local compressed-row cache. `MLX_SERVE_MOE_PREFILL_GROUP=1` separately enables counting grouping and exact inverse/weighted reduction around native expert projections. All default off. The long PLE comparison forces the MoE flag off; its result is not a measurement of the combined flags. New module tests must be explicitly imported in `src/tests.zig`, or filtered commands only run harness tests. See the [report](followups/20260912-prefill-ahead-and-grouping.md) and `followups/prefill-ahead-validation.json` for source fingerprints and final checks.
+
+Next useful work is GPU attribution and expert-matrix dataflow. The warm 62k request spent only 307 ms total in native CPU PLE gather, so another large PLE component ratio cannot supply the missing seconds. Native sorted gather QMM repeats its K/weight-load loop when a fixed row tile crosses experts; a replacement must also overcome the already-recorded negative results for larger tiles, dense expansion and direct input gather. Do not repeat those unmodified sweeps. Combine measured reductions of the whole expert pipeline and projections before spending another long throughput run.

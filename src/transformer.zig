@@ -10791,6 +10791,8 @@ pub const CaptureLayers = struct {
 
 pub const ForwardCtx = struct {
     cache: *KVCache,
+    /// Request-owned, CPU-only selected PLE rows prepared ahead of prefill.
+    ple_ahead: ?*@import("ple_packed.zig").Ahead = null,
     moe_seq_offset: *usize,
     ssm_entries: ?[]SSMCacheEntry,
     capture_hidden: ?*mlx.mlx_array,
@@ -17116,12 +17118,25 @@ pub const Transformer = struct {
         const n: usize = mlx.mlx_array_size(token_ids);
         const batch: c_int = @intCast(n / @as(usize, @intCast(seq_len)));
         const shape = [_]c_int{ batch, seq_len, @intCast(emb_dim) };
+        // The packed-row arm owns small immutable MLX inputs and returns a
+        // lazy BF16 result directly, with no CPU readback of the GPU output.
+        const staging = @import("ple_packed.zig");
+        const capture = ctx.batch_slots == null and self.pleClaimSpecCapture(entry, n);
+        if (staging.eligible(&st.table, n, ctx.ple_defer)) {
+            const rows = try self.pleRowIds(ctx, token_ids, entry, layer, seq_len, capture);
+            defer self.allocator.free(rows);
+            const prefetched = if (ctx.ple_ahead) |ahead| try ahead.gather(self.s, rows) else null;
+            const emb = prefetched orelse try staging.gather(self.allocator, self.s, &st.table, rows);
+            defer _ = mlx.mlx_array_free(emb);
+            var shaped = mlx.mlx_array_new();
+            errdefer _ = mlx.mlx_array_free(shaped);
+            try mlx.check(mlx.mlx_reshape(&shaped, emb, &shape, 3, self.s));
+            return shaped;
+        }
         // Packed bf16 on the host (RNE) so the upload is one copy — no
         // mid-graph eval, no GPU sync inside the layer loop.
         const pk = try self.allocator.alloc(u16, n * emb_dim);
         defer self.allocator.free(pk);
-        // The batched arm keeps its history per SLOT and never captures.
-        const capture = ctx.batch_slots == null and self.pleClaimSpecCapture(entry, n);
         if (ctx.ple_defer and ctx.batch_slots == null) {
             std.debug.assert(ctx.ple_pending == null);
             @memset(pk, 0);
@@ -17138,6 +17153,34 @@ pub const Transformer = struct {
         }
         try self.pleGatherBf16(ctx, token_ids, entry, layer, seq_len, pk, capture);
         return mlx.mlx_array_new_data(pk.ptr, &shape, 3, .bfloat16);
+    }
+
+    /// Prepare immutable row IDs from a snapshot of this request's history.
+    /// Consumption still uses pleRowIds, advancing the real history exactly
+    /// once and checking all IDs against this independent CPU preparation.
+    pub fn preparePleAhead(self: *Transformer, ctx: *ForwardCtx, ids: []const u32, token_ends: []const usize) !?*@import("ple_packed.zig").Ahead {
+        const staging = @import("ple_packed.zig");
+        const st = self.qwen4 orelse return null;
+        if (!staging.Ahead.enabled() or ids.len > 131072 or token_ends.len < 2 or ctx.batch_slots != null or ctx.ple_defer) return null;
+        const entries = ctx.ssm_entries orelse return null;
+        if (self.config.ple_layer_idx < 0) return null;
+        const layer: usize = @intCast(self.config.ple_layer_idx);
+        if (layer >= entries.len) return null;
+        var from: usize = 0;
+        for (token_ends) |end| {
+            if (end <= from or end > ids.len or !staging.eligible(&st.table, end - from, false)) return null;
+            from = end;
+        }
+        if (from != ids.len) return null;
+        const entry = &entries[layer];
+        const prev: [8]u32 = if (entry.ple_prev_valid) entry.ple_prev else @splat(st.hash.eos);
+        const rows = try self.allocator.alloc(i64, ids.len * st.hash.n_heads);
+        defer self.allocator.free(rows);
+        st.hash.rowIds(prev[0 .. st.hash.ngram_size - 1], ids, rows);
+        const ends = try self.allocator.alloc(usize, token_ends.len);
+        defer self.allocator.free(ends);
+        for (token_ends, ends) |end, *r| r.* = end * st.hash.n_heads;
+        return try staging.Ahead.create(&st.table, rows, ends);
     }
 
     /// Claim (or clear) `entry`'s fixed spec-PLE token slot for a gather of
@@ -17188,7 +17231,7 @@ pub const Transformer = struct {
     /// entry's n-gram history. `capture` comes from `pleClaimSpecCapture` at
     /// BUILD time (never re-read off `spec_capture_ssm`, which a deferred
     /// flush sees already cleared).
-    fn pleGatherBf16(self: *Transformer, ctx: *ForwardCtx, token_ids: mlx.mlx_array, entry: *SSMCacheEntry, layer: usize, seq_len: c_int, pk: []u16, capture: bool) !void {
+    fn pleRowIds(self: *Transformer, ctx: *ForwardCtx, token_ids: mlx.mlx_array, entry: *SSMCacheEntry, layer: usize, seq_len: c_int, capture: bool) ![]i64 {
         const st = self.qwen4.?;
         const ctx_len: usize = st.hash.ngram_size - 1;
         // Draft ids arrive as lazy graphs of whatever dtype the sampler
@@ -17207,7 +17250,7 @@ pub const Transformer = struct {
         for (0..n) |i| ids[i] = @intCast(src[i]);
         const nh = st.hash.n_heads;
         const rows = try self.allocator.alloc(i64, n * nh);
-        defer self.allocator.free(rows);
+        errdefer self.allocator.free(rows);
         if (ctx.batch_slots) |slots| {
             std.debug.assert(seq_len == 1 and n == slots.len);
             for (slots, 0..) |sc, i| {
@@ -17229,6 +17272,15 @@ pub const Transformer = struct {
             st.hash.rowIds(prev[0..ctx_len], ids, rows);
             advancePlePrev(entry, prev, ids, ctx_len);
         }
+        return rows;
+    }
+
+    fn pleGatherBf16(self: *Transformer, ctx: *ForwardCtx, token_ids: mlx.mlx_array, entry: *SSMCacheEntry, layer: usize, seq_len: c_int, pk: []u16, capture: bool) !void {
+        const st = self.qwen4.?;
+        const n = mlx.mlx_array_size(token_ids);
+        const nh = st.hash.n_heads;
+        const rows = try self.pleRowIds(ctx, token_ids, entry, layer, seq_len, capture);
+        defer self.allocator.free(rows);
         const emb_dim: usize = st.table.dim * nh;
         const host = try self.allocator.alloc(f32, n * emb_dim);
         defer self.allocator.free(host);
@@ -24155,18 +24207,25 @@ pub const Transformer = struct {
             defer _ = mlx.mlx_array_free(flat_inds);
             try mlx.check(mlx.mlx_reshape(&flat_inds, inds, &flat_shape, 1, self.s));
 
+            const mg = @import("moe_prefill.zig");
+            const grouped = if (mg.enabled() and cfg.isQwen4() and B == 1 and S >= 2048 and S <= 8192 and D == 2560 and K == 10 and cfg.num_experts == 512 and !has_expert_bias and mlx.mlx_array_dtype(expert_x) == .bfloat16 and mlx.mlx_array_dtype(norm_scores) == .bfloat16 and gate_qp.bits == 4 and up_qp.bits == 4 and down_qp.bits == 4 and gate_qp.mode == .affine and up_qp.mode == .affine and down_qp.mode == .affine)
+                try mg.group(self.s, flat_inds)
+            else
+                null;
+            defer if (grouped) |g| g.deinit();
+
             // order = argsort(flat_inds), inv_order = argsort(order)
             var order = mlx.mlx_array_new();
             defer _ = mlx.mlx_array_free(order);
-            try mlx.check(mlx.mlx_argsort_axis(&order, flat_inds, 0, self.s));
+            if (grouped) |g| try mlx.check(mlx.mlx_array_set(&order, g.order)) else try mlx.check(mlx.mlx_argsort_axis(&order, flat_inds, 0, self.s));
             var inv_order = mlx.mlx_array_new();
             defer _ = mlx.mlx_array_free(inv_order);
-            try mlx.check(mlx.mlx_argsort_axis(&inv_order, order, 0, self.s));
+            if (grouped) |g| try mlx.check(mlx.mlx_array_set(&inv_order, g.inverse)) else try mlx.check(mlx.mlx_argsort_axis(&inv_order, order, 0, self.s));
 
             // sorted_inds = flat_inds[order], shape [N]
             var sorted_inds = mlx.mlx_array_new();
             defer _ = mlx.mlx_array_free(sorted_inds);
-            try mlx.check(mlx.mlx_take_axis(&sorted_inds, flat_inds, order, 0, self.s));
+            if (grouped) |g| try mlx.check(mlx.mlx_array_set(&sorted_inds, g.sorted)) else try mlx.check(mlx.mlx_take_axis(&sorted_inds, flat_inds, order, 0, self.s));
 
             // lhs_idx = order // K, shape [N] — picks the source token row
             const k_arr = mlx.mlx_array_new_int(K);
@@ -24231,13 +24290,21 @@ pub const Transformer = struct {
             // indexes — the bias must be added before the inverse permutation.
             try self.addExpertBias(&down_squeezed, mw.switch_down_bias, sorted_inds);
 
-            // Inverse permute → original order, then reshape back to [B,S,K,hidden].
-            var down_unsorted = mlx.mlx_array_new();
-            defer _ = mlx.mlx_array_free(down_unsorted);
-            try mlx.check(mlx.mlx_take_axis(&down_unsorted, down_squeezed, inv_order, 0, self.s));
-            const hidden = mlx.getShape(down_unsorted)[1];
-            const bskh_shape = [_]c_int{ B, S, K, hidden };
-            try mlx.check(mlx.mlx_reshape(&down_out, down_unsorted, &bskh_shape, 4, self.s));
+            if (grouped != null) {
+                const sum = try mg.reduce(self.s, down_squeezed, norm_scores, inv_order);
+                defer _ = mlx.mlx_array_free(sum);
+                const bsh = [_]c_int{ B, S, D };
+                try mlx.check(mlx.mlx_reshape(&down_out, sum, &bsh, 3, self.s));
+                moe_reduced = true;
+            } else {
+                // Inverse permute → original order, then reshape back to [B,S,K,hidden].
+                var down_unsorted = mlx.mlx_array_new();
+                defer _ = mlx.mlx_array_free(down_unsorted);
+                try mlx.check(mlx.mlx_take_axis(&down_unsorted, down_squeezed, inv_order, 0, self.s));
+                const hidden = mlx.getShape(down_unsorted)[1];
+                const bskh_shape = [_]c_int{ B, S, K, hidden };
+                try mlx.check(mlx.mlx_reshape(&down_out, down_unsorted, &bskh_shape, 4, self.s));
+            }
         } else if (B * S == 1 and useGatherQmvDecode(self, gate_qp, up_qp) and mw.switch_gate_s.ctx != null and mw.switch_up_s.ctx != null and mw.switch_down_s.ctx != null and
             try self.moeDecodeGatherQmv(&down_out, expert_x, inds, norm_scores, &moe_reduced, mw, gate_qp, up_qp, down_qp, D, K, B, S))
         {

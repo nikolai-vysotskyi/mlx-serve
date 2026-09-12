@@ -1,0 +1,35 @@
+{
+  "kind": "source/build/regression/integration validation; no matched combined speedup result",
+  "source_sha256": {
+    "src/generate.zig": "b3b0b5edb30b9b2d8f209a182a6d2c98c50f139d9329a6d46a8452b5ac3ec3a0",
+    "src/tests.zig": "6de7c82b1f7440753c0b012b23e0684a83ae347875c52dd75742e326fbfc6c1b",
+    "src/transformer.zig": "1e26d4a25f737517bb12754180460b16576486bd724c56f8d431038324693989",
+    "src/ple_packed.zig": "b2ccffd830b95489d171a9f4f4d6ab62c931600d29dd3bc34c370d977feddf6b",
+    "src/moe_prefill.zig": "31b8c08ff5d9551ca57ff2feecec47a9e541f7f0dbfc9fbb1111e40c55150475",
+    "src/kernels/ple_packed.metal": "fd5a2afc0d4b801b625e75fa112aaf8558d602164091065849fd836abe8dc543",
+    "src/kernels/moe_prefill_count.metal": "8a38983124c7673b5bb8393b8186450edecc805a55db54a2a30359385c6de167",
+    "src/kernels/moe_prefill_prefix.metal": "a9bdae220546e124b2a3cf7c839d72c786f5a33cb144ab6373cc62be4cb6cbce",
+    "src/kernels/moe_prefill_reduce.metal": "1d8308ff2b4817ae6e3a7dbbf246051bdd5482eec5065cc76e99cf51b85a6a50",
+    "src/kernels/moe_prefill_scatter.metal": "4d4b3e30f32c8236a001bb18e241d7939fddbea310ecd401bf05ce8c01c5675b"
+  },
+  "binary_sha256": "5db197bfe17961738984372f2ba726f4bac55dbdb9fa3e95371c8b67f7a0da19",
+  "checks": {
+    "ple_focused": "Build Summary: 9/9 steps succeeded; 3/3 tests passed\ntest success\n+- run test 3 pass (3 total) 896ms MaxRSS:59M\n|  +- compile test debug native-native.26.2 success 1s MaxRSS:389M\n|     +- options cached\n|     +- translate-c cached 41ms MaxRSS:30M\n|     +- translate-c cached 42ms MaxRSS:30M\n|     +- translate-c cached 42ms MaxRSS:30M\n+- run test cached\n   +- compile test debug native-native.26.2 cached 47ms MaxRSS:32M",
+    "moe_focused": "Build Summary: 9/9 steps succeeded; 3/3 tests passed\ntest success\n+- run test 3 pass (3 total) 701ms MaxRSS:57M\n|  +- compile test debug native-native.26.2 success 1s MaxRSS:385M\n|     +- options cached\n|     +- translate-c cached 40ms MaxRSS:30M\n|     +- translate-c cached 41ms MaxRSS:30M\n|     +- translate-c cached 40ms MaxRSS:30M\n+- run test cached\n   +- compile test debug native-native.26.2 cached 46ms MaxRSS:32M",
+    "full_suite": "Build Summary: 9/9 steps succeeded; 2331/2485 tests passed (154 skipped)\ntest success\n+- run test 2331 pass, 154 skip (2485 total) 2m MaxRSS:5G\n|  +- compile test debug native-native.26.2 success 26s MaxRSS:2G\n|     +- options cached\n|     +- translate-c cached 41ms MaxRSS:30M\n|     +- translate-c cached 42ms MaxRSS:30M\n|     +- translate-c cached 41ms MaxRSS:30M\n+- run test cached\n   +- compile test debug native-native.26.2 cached 47ms MaxRSS:32M",
+    "build": "Build Summary: 7/7 steps succeeded\ninstall success\n+- install mlx-serve success\n   +- compile exe mlx-serve fast native-native.26.2 success 1m MaxRSS:4G\n      +- options cached\n      +- translate-c cached 37ms MaxRSS:30M\n      +- translate-c cached 38ms MaxRSS:30M\n      +- translate-c cached 37ms MaxRSS:30M"
+  },
+  "combined_smoke": {
+    "prompt_tokens": 13515,
+    "cached_tokens": 0,
+    "answer": "MAGNOLIA-7731",
+    "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe",
+    "observed_prefill_tps": 2444.8,
+    "speedup_claim": false,
+    "engagement": [
+      "[moe-prefill-group] engaged: tokens=8192 E=512 K=10 H=2560 native_projections=true bf16_grouped_reduce=true",
+      "[ple-packed] engaged: rows=131072 unique=67449 packed_bytes=6744900 immutable=true output=mlx-bf16",
+      "[ple-ahead] chunks=2/2 pack=181.30ms wait=140.40ms row_hits=16190 row_misses=85755 cache_limit_rows=262144"
+    ]
+  }
+}

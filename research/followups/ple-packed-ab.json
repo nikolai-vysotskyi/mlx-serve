@@ -1,0 +1,197 @@
+{
+  "kind": "HTTP matched screening; not llmprobe",
+  "binary_sha256": "6bfceb7877de1c1f72238fe78b1aea3c0ca725adf4025a22aa4f600902e60c35",
+  "power": "AC Power, 99 percent; same conditions for all arms",
+  "corpus_sha256": "1b0d4f22b5f08c471a93caac3d5f4729be34c64a04e4c0e303a3fc44bcde36a0",
+  "records": [
+    {
+      "arm": "base",
+      "loaded_s": 10.471784374998606,
+      "memory_before": {
+        "active_bytes": 73225161402,
+        "peak_bytes": 73494918980,
+        "available_bytes": 46969962496,
+        "max_safe_context": 262144,
+        "cache_bytes": 72294072
+      },
+      "requests": [
+        {
+          "wall_s": 7.465031167001143,
+          "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe",
+          "prefill_tps": 1864.0,
+          "decode_tps": 52.0,
+          "memory_after": {
+            "active_bytes": 73223749014,
+            "peak_bytes": 76778897296,
+            "available_bytes": 46601420800,
+            "max_safe_context": 262144,
+            "cache_bytes": 416347709
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=40199b, tools=0b, tool_msgs=0) \n  > \"Nonce 81492017. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=13515 tokens, max_gen=32, ctx=131072\n[qwen4] PLE prefill gather: SERIAL mmap walk (prefill width: 131072 rows; the pool engages past kv 262144, QWEN4_PLE_PREFETCH_PREFILL_MIN_KV overrides)\n[qsa] sparse attention engaged: kv=8192 blocks=2048 top-512 (budget 2048, ratio 4)\n[qsa-select] engaged (S=8192 nb=2048 k=512 tg=256) \u2014 MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain\n[qsa-fused] engaged: msv_attn_p256 mask arm qL=8192 kL=8192 Hq=24 Hkv=2 (MLX_SERVE_QSA_FUSED=0 restores stock sdpa)\n[qsa-gather] engaged: msv_qsa_nax_precise S=5322 kv=13514 blocks=512 bk=32 tgmem=20992 (MLX_SERVE_QSA_NAX=0 restores the stock gather)\n[qsa-score] engaged (S=1 nb=3378 layout=base nsg=4 nsh=106) \u2014 MLX_SERVE_QSA_SCORE_FUSED=0 restores the composed chain\n[qsa-select] engaged (S=1 nb=3378 k=512 tg=1024) \u2014 MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain\n[qsa-decode-gather] engaged (S=1 kv=13515 rows=2051) (MLX_SERVE_QSA_DECODE_GATHER=0 restores the dense mask arm)\n  [prefill-trace] tokens=13515 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=7211ms eval=14ms last_token=1ms total=7227ms\n  [qsa-arms] qsa=decode_gather calls=180 mask=12 decode=156 verify=0 prefill=12\n  <- 13515+10 tokens (7460ms) [prefill: 1864.0 tok/s, decode: 52.0 tok/s] [stop]\n",
+          "usage": {
+            "prompt_tokens": 13515,
+            "completion_tokens": 10,
+            "total_tokens": 13525,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "answer": "MAGNOLIA-7731"
+        },
+        {
+          "wall_s": 8.388573541000369,
+          "prompt_sha256": "7da74a93a78843fbb891a082b87afc6df5d757ed5fcab5684728184f2d25fcbf",
+          "prefill_tps": 1923.1,
+          "decode_tps": 52.1,
+          "memory_after": {
+            "active_bytes": 73223749024,
+            "peak_bytes": 76778897296,
+            "available_bytes": 46659977216,
+            "max_safe_context": 262144,
+            "cache_bytes": 474525925
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=47235b, tools=0b, tool_msgs=0) \n  > \"Nonce 52839106. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=15715 tokens, max_gen=32, ctx=131072\n  [prefill-trace] tokens=15715 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=8135ms eval=11ms last_token=1ms total=8148ms\n  [qsa-arms] qsa=decode_gather calls=180 mask=12 decode=156 verify=0 prefill=12\n  <- 15715+10 tokens (8380ms) [prefill: 1923.1 tok/s, decode: 52.1 tok/s] [stop]\n",
+          "usage": {
+            "prompt_tokens": 15715,
+            "completion_tokens": 10,
+            "total_tokens": 15725,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "answer": "MAGNOLIA-7731"
+        }
+      ]
+    },
+    {
+      "arm": "current",
+      "loaded_s": 11.556328290998863,
+      "memory_before": {
+        "active_bytes": 73225289972,
+        "peak_bytes": 73494918980,
+        "available_bytes": 47398584320,
+        "max_safe_context": 262144,
+        "cache_bytes": 72296044
+      },
+      "requests": [
+        {
+          "wall_s": 6.882541208000475,
+          "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe",
+          "prefill_tps": 2026.3,
+          "decode_tps": 52.6,
+          "memory_after": {
+            "active_bytes": 73223867788,
+            "peak_bytes": 76549476078,
+            "available_bytes": 46745894912,
+            "max_safe_context": 262144,
+            "cache_bytes": 416345405
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=40199b, tools=0b, tool_msgs=0) \n  > \"Nonce 81492017. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=13515 tokens, max_gen=32, ctx=131072\n[hc-prefill] engaged: S=8192 B=1 pending=false native_inject=true\n[gdn-prefill] engaged: S=8192 B=1 cold=true\n[qwen4] PLE prefill gather: SERIAL mmap walk (prefill width: 131072 rows; the pool engages past kv 262144, QWEN4_PLE_PREFETCH_PREFILL_MIN_KV overrides)\n[qsa] sparse attention engaged: kv=8192 blocks=2048 top-512 (budget 2048, ratio 4)\n[qsa-select] engaged (S=8192 nb=2048 k=512 tg=256) \u2014 MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain\n[qsa-pair] engaged: S=8192 kv=8192 KB=512 B=1\n[qsa-score] engaged (S=1 nb=3378 layout=base nsg=4 nsh=106) \u2014 MLX_SERVE_QSA_SCORE_FUSED=0 restores the composed chain\n[qsa-select] engaged (S=1 nb=3378 k=512 tg=1024) \u2014 MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain\n[qsa-decode-gather] engaged (S=1 kv=13515 rows=2051) (MLX_SERVE_QSA_DECODE_GATHER=0 restores the dense mask arm)\n  [prefill-trace] tokens=13515 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=6634ms eval=6ms last_token=5ms total=6645ms\n  [qsa-arms] qsa=decode_gather calls=180 mask=0 decode=156 verify=0 prefill=24\n  <- 13515+10 tokens (6877ms) [prefill: 2026.3 tok/s, decode: 52.6 tok/s] [stop]\n",
+          "usage": {
+            "prompt_tokens": 13515,
+            "completion_tokens": 10,
+            "total_tokens": 13525,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "answer": "MAGNOLIA-7731"
+        },
+        {
+          "wall_s": 7.356317083000249,
+          "prompt_sha256": "7da74a93a78843fbb891a082b87afc6df5d757ed5fcab5684728184f2d25fcbf",
+          "prefill_tps": 2201.0,
+          "decode_tps": 52.4,
+          "memory_after": {
+            "active_bytes": 73223867796,
+            "peak_bytes": 76549476078,
+            "available_bytes": 46649442304,
+            "max_safe_context": 262144,
+            "cache_bytes": 474540277
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=47235b, tools=0b, tool_msgs=0) \n  > \"Nonce 52839106. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=15715 tokens, max_gen=32, ctx=131072\n  [prefill-trace] tokens=15715 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=7107ms eval=6ms last_token=1ms total=7115ms\n  [qsa-arms] qsa=decode_gather calls=180 mask=0 decode=156 verify=0 prefill=24\n  <- 15715+10 tokens (7348ms) [prefill: 2201.0 tok/s, decode: 52.4 tok/s] [stop]\n",
+          "usage": {
+            "prompt_tokens": 15715,
+            "completion_tokens": 10,
+            "total_tokens": 15725,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "answer": "MAGNOLIA-7731"
+        }
+      ]
+    },
+    {
+      "arm": "packed",
+      "loaded_s": 11.034615415999724,
+      "memory_before": {
+        "active_bytes": 73225306116,
+        "peak_bytes": 73494918980,
+        "available_bytes": 47211053056,
+        "max_safe_context": 262144,
+        "cache_bytes": 72296044
+      },
+      "requests": [
+        {
+          "wall_s": 7.24509662499986,
+          "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe",
+          "prefill_tps": 1922.1,
+          "decode_tps": 52.3,
+          "memory_after": {
+            "active_bytes": 73223867788,
+            "peak_bytes": 76549476078,
+            "available_bytes": 46715092992,
+            "max_safe_context": 262144,
+            "cache_bytes": 416335184
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=40199b, tools=0b, tool_msgs=0) \n  > \"Nonce 81492017. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=13515 tokens, max_gen=32, ctx=131072\n[hc-prefill] engaged: S=8192 B=1 pending=false native_inject=true\n[gdn-prefill] engaged: S=8192 B=1 cold=true\n[ple-packed] engaged: rows=131072 unique=67449 packed_bytes=6744900 immutable=true output=mlx-bf16\n[qsa] sparse attention engaged: kv=8192 blocks=2048 top-512 (budget 2048, ratio 4)\n[qsa-select] engaged (S=8192 nb=2048 k=512 tg=256) \u2014 MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain\n[qsa-pair] engaged: S=8192 kv=8192 KB=512 B=1\n[qsa-score] engaged (S=1 nb=3378 layout=base nsg=4 nsh=106) \u2014 MLX_SERVE_QSA_SCORE_FUSED=0 restores the composed chain\n[qsa-select] engaged (S=1 nb=3378 k=512 tg=1024) \u2014 MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain\n[qsa-decode-gather] engaged (S=1 kv=13515 rows=2051) (MLX_SERVE_QSA_DECODE_GATHER=0 restores the dense mask arm)\n  [prefill-trace] tokens=13515 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=6994ms eval=6ms last_token=5ms total=7006ms\n  [qsa-arms] qsa=decode_gather calls=180 mask=0 decode=156 verify=0 prefill=24\n  <- 13515+10 tokens (7240ms) [prefill: 1922.1 tok/s, decode: 52.3 tok/s] [stop]\n",
+          "usage": {
+            "prompt_tokens": 13515,
+            "completion_tokens": 10,
+            "total_tokens": 13525,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "answer": "MAGNOLIA-7731"
+        },
+        {
+          "wall_s": 7.237175999998726,
+          "prompt_sha256": "7da74a93a78843fbb891a082b87afc6df5d757ed5fcab5684728184f2d25fcbf",
+          "prefill_tps": 2238.6,
+          "decode_tps": 52.1,
+          "memory_after": {
+            "active_bytes": 73223867796,
+            "peak_bytes": 76549476078,
+            "available_bytes": 46627831808,
+            "max_safe_context": 262144,
+            "cache_bytes": 474537685
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=47235b, tools=0b, tool_msgs=0) \n  > \"Nonce 52839106. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=15715 tokens, max_gen=32, ctx=131072\n  [prefill-trace] tokens=15715 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=6987ms eval=6ms last_token=1ms total=6995ms\n  [qsa-arms] qsa=decode_gather calls=180 mask=0 decode=156 verify=0 prefill=24\n  <- 15715+10 tokens (7229ms) [prefill: 2238.6 tok/s, decode: 52.1 tok/s] [stop]\n",
+          "usage": {
+            "prompt_tokens": 15715,
+            "completion_tokens": 10,
+            "total_tokens": 15725,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "answer": "MAGNOLIA-7731"
+        }
+      ]
+    }
+  ],
+  "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+  "settings": {
+    "ctx": 131072,
+    "prefill_chunk": 8192,
+    "prefix_cache_entries": 0,
+    "kv_quant": "off",
+    "mtp": false,
+    "pld": false,
+    "temperature": 0,
+    "seed": 1234,
+    "max_tokens": 32
+  }
+}

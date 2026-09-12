@@ -1,0 +1,138 @@
+{
+  "kind": "HTTP matched screening; not llmprobe",
+  "binary_sha256": "8e3eceadab95651e86640bd3613920d476464fe5b1ceb49f01efb24069849d18",
+  "power": "AC Power, 99 percent; same conditions for all arms",
+  "corpus_sha256": "1b0d4f22b5f08c471a93caac3d5f4729be34c64a04e4c0e303a3fc44bcde36a0",
+  "records": [
+    {
+      "arm": "current",
+      "loaded_s": 10.066354917000353,
+      "memory_before": {
+        "active_bytes": 73225275832,
+        "peak_bytes": 73494918980,
+        "available_bytes": 50197889024,
+        "max_safe_context": 262144,
+        "cache_bytes": 72539560
+      },
+      "requests": [
+        {
+          "wall_s": 5.9873805420011195,
+          "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe",
+          "prefill_tps": 2341.1,
+          "decode_tps": 52.4,
+          "memory_after": {
+            "active_bytes": 73223867788,
+            "peak_bytes": 76549689070,
+            "available_bytes": 49662525440,
+            "max_safe_context": 262144,
+            "cache_bytes": 416454717
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=40199b, tools=0b, tool_msgs=0) \n  > \"Nonce 81492017. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=13515 tokens, max_gen=32, ctx=131072\n[hc-prefill] engaged: S=8192 B=1 pending=false native_inject=true\n[gdn-prefill] engaged: S=8192 B=1 cold=true\n[qwen4] PLE prefill gather: SERIAL mmap walk (prefill width: 131072 rows; the pool engages past kv 262144, QWEN4_PLE_PREFETCH_PREFILL_MIN_KV overrides)\n[qwen4-prof] ple gather S=8192: 176.65 ms\n[qsa] sparse attention engaged: kv=8192 blocks=2048 top-512 (budget 2048, ratio 4)\n[qsa-select] engaged (S=8192 nb=2048 k=512 tg=256) \u2014 MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain\n[qsa-pair] engaged: S=8192 kv=8192 KB=512 B=1\n[qwen4-prof] ple gather S=5322: 57.60 ms\n[qwen4-prof] ple gather S=1: 0.17 ms\n[qsa-score] engaged (S=1 nb=3378 layout=base nsg=4 nsh=106) \u2014 MLX_SERVE_QSA_SCORE_FUSED=0 restores the composed chain\n[qsa-select] engaged (S=1 nb=3378 k=512 tg=1024) \u2014 MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain\n[qsa-decode-gather] engaged (S=1 kv=13515 rows=2051) (MLX_SERVE_QSA_DECODE_GATHER=0 restores the dense mask arm)\n  [prefill-trace] tokens=13515 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=5740ms eval=5ms last_token=1ms total=5748ms\n[qwen4-prof] ple gather S=1: 0.20 ms\n[qwen4-prof] ple gather S=1: 0.15 ms\n[qwen4-prof] ple gather S=1: 0.15 ms\n[qwen4-prof] ple gather S=1: 0.15 ms\n[qwen4-prof] ple gather S=1: 0.15 ms\n[qwen4-prof] ple gather S=1: 0.16 ms\n[qwen4-prof] ple gather S=1: 0.15 ms\n[qwen4-prof] ple gather S=1: 0.17 ms\n[qwen4-prof] ple gather S=1: 0.14 ms\n[qwen4-prof] ple gather S=1: 0.16 ms\n[qwen4-prof] ple gather S=1: 0.17 ms\n[qwen4-prof] ple gather S=1: 0.16 ms\n  [qsa-arms] qsa=decode_gather calls=180 mask=0 decode=156 verify=0 prefill=24\n  <- 13515+10 tokens (5980ms) [prefill: 2341.1 tok/s, decode: 52.4 tok/s] [stop]\n",
+          "usage": {
+            "prompt_tokens": 13515,
+            "completion_tokens": 10,
+            "total_tokens": 13525,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "answer": "MAGNOLIA-7731"
+        },
+        {
+          "wall_s": 30.25536062500032,
+          "prompt_sha256": "a78ba50b7ce2d1ce11bb19b3f57630c4ead99d785d3087f1adf7817d9747ee17",
+          "prefill_tps": 2071.3,
+          "decode_tps": 50.8,
+          "memory_after": {
+            "active_bytes": 73223867796,
+            "peak_bytes": 78143458918,
+            "available_bytes": 48276865024,
+            "max_safe_context": 262144,
+            "cache_bytes": 1854239369
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=185543b, tools=0b, tool_msgs=0) \n  > \"Nonce 52839106. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=62176 tokens, max_gen=32, ctx=131072\n[qwen4-prof] ple gather S=8192: 40.42 ms\n[qwen4-prof] ple gather S=8192: 35.94 ms\n[qwen4-prof] ple gather S=8192: 37.65 ms\n[qwen4-prof] ple gather S=8192: 40.01 ms\n[qwen4-prof] ple gather S=8192: 38.53 ms\n[qwen4-prof] ple gather S=8192: 40.41 ms\n[qwen4-prof] ple gather S=8192: 49.57 ms\n[qwen4-prof] ple gather S=4831: 24.35 ms\n[qwen4-prof] ple gather S=1: 0.19 ms\n  [prefill-trace] tokens=62176 chunks=8 chunk_size=8192 chunk_widths=8192..8192 chunked=29953ms eval=37ms last_token=2ms total=29993ms\n[qwen4-prof] ple gather S=1: 0.13 ms\n[qwen4-prof] ple gather S=1: 0.15 ms\n[qwen4-prof] ple gather S=1: 0.15 ms\n[qwen4-prof] ple gather S=1: 0.15 ms\n[qwen4-prof] ple gather S=1: 0.16 ms\n[qwen4-prof] ple gather S=1: 0.13 ms\n[qwen4-prof] ple gather S=1: 0.16 ms\n[qwen4-prof] ple gather S=1: 0.15 ms\n[qwen4-prof] ple gather S=1: 0.15 ms\n[qwen4-prof] ple gather S=1: 0.14 ms\n[qwen4-prof] ple gather S=1: 0.13 ms\n[qwen4-prof] ple gather S=1: 0.17 ms\n  [qsa-arms] qsa=decode_gather calls=252 mask=0 decode=156 verify=0 prefill=96\n  <- 62176+10 tokens (30232ms) [prefill: 2071.3 tok/s, decode: 50.8 tok/s] [stop]\n",
+          "usage": {
+            "prompt_tokens": 62176,
+            "completion_tokens": 10,
+            "total_tokens": 62186,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "answer": "MAGNOLIA-7731"
+        }
+      ]
+    },
+    {
+      "arm": "ahead",
+      "loaded_s": 9.52197120799974,
+      "memory_before": {
+        "active_bytes": 73223867916,
+        "peak_bytes": 73494918980,
+        "available_bytes": 49753718784,
+        "max_safe_context": 262144,
+        "cache_bytes": 67322010
+      },
+      "requests": [
+        {
+          "wall_s": 6.001733082999635,
+          "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe",
+          "prefill_tps": 2335.0,
+          "decode_tps": 52.2,
+          "memory_after": {
+            "active_bytes": 73223867788,
+            "peak_bytes": 76549689070,
+            "available_bytes": 49622843392,
+            "max_safe_context": 262144,
+            "cache_bytes": 416468833
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=40199b, tools=0b, tool_msgs=0) \n  > \"Nonce 81492017. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=13515 tokens, max_gen=32, ctx=131072\n[hc-prefill] engaged: S=8192 B=1 pending=false native_inject=true\n[gdn-prefill] engaged: S=8192 B=1 cold=true\n[ple-packed] engaged: rows=131072 unique=67449 packed_bytes=6744900 immutable=true output=mlx-bf16\n[qsa] sparse attention engaged: kv=8192 blocks=2048 top-512 (budget 2048, ratio 4)\n[qsa-select] engaged (S=8192 nb=2048 k=512 tg=256) \u2014 MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain\n[qsa-pair] engaged: S=8192 kv=8192 KB=512 B=1\n[ple-ahead] chunks=2/2 pack=206.83ms wait=160.22ms row_hits=16190 row_misses=85755 cache_limit_rows=262144\n[qwen4-prof] ple gather S=1: 0.16 ms\n[qsa-score] engaged (S=1 nb=3378 layout=base nsg=4 nsh=106) \u2014 MLX_SERVE_QSA_SCORE_FUSED=0 restores the composed chain\n[qsa-select] engaged (S=1 nb=3378 k=512 tg=1024) \u2014 MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain\n[qsa-decode-gather] engaged (S=1 kv=13515 rows=2051) (MLX_SERVE_QSA_DECODE_GATHER=0 restores the dense mask arm)\n  [prefill-trace] tokens=13515 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=5753ms eval=4ms last_token=1ms total=5763ms\n[qwen4-prof] ple gather S=1: 0.14 ms\n[qwen4-prof] ple gather S=1: 0.14 ms\n[qwen4-prof] ple gather S=1: 0.18 ms\n[qwen4-prof] ple gather S=1: 0.20 ms\n[qwen4-prof] ple gather S=1: 0.12 ms\n[qwen4-prof] ple gather S=1: 0.14 ms\n[qwen4-prof] ple gather S=1: 0.15 ms\n[qwen4-prof] ple gather S=1: 0.12 ms\n[qwen4-prof] ple gather S=1: 0.14 ms\n[qwen4-prof] ple gather S=1: 0.19 ms\n[qwen4-prof] ple gather S=1: 0.16 ms\n[qwen4-prof] ple gather S=1: 0.17 ms\n  [qsa-arms] qsa=decode_gather calls=180 mask=0 decode=156 verify=0 prefill=24\n  <- 13515+10 tokens (5996ms) [prefill: 2335.0 tok/s, decode: 52.2 tok/s] [stop]\n",
+          "usage": {
+            "prompt_tokens": 13515,
+            "completion_tokens": 10,
+            "total_tokens": 13525,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "answer": "MAGNOLIA-7731"
+        },
+        {
+          "wall_s": 29.104313167001237,
+          "prompt_sha256": "a78ba50b7ce2d1ce11bb19b3f57630c4ead99d785d3087f1adf7817d9747ee17",
+          "prefill_tps": 2154.0,
+          "decode_tps": 50.5,
+          "memory_after": {
+            "active_bytes": 73223867796,
+            "peak_bytes": 78143475302,
+            "available_bytes": 48167927808,
+            "max_safe_context": 262144,
+            "cache_bytes": 1854242567
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=185543b, tools=0b, tool_msgs=0) \n  > \"Nonce 52839106. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=62176 tokens, max_gen=32, ctx=131072\n[ple-ahead] chunks=8/8 pack=18.54ms wait=6.44ms row_hits=377074 row_misses=85747 cache_limit_rows=262144\n[qwen4-prof] ple gather S=1: 0.16 ms\n  [prefill-trace] tokens=62176 chunks=8 chunk_size=8192 chunk_widths=8192..8192 chunked=28797ms eval=35ms last_token=1ms total=28840ms\n[qwen4-prof] ple gather S=1: 0.12 ms\n[qwen4-prof] ple gather S=1: 0.18 ms\n[qwen4-prof] ple gather S=1: 0.15 ms\n[qwen4-prof] ple gather S=1: 0.17 ms\n[qwen4-prof] ple gather S=1: 0.16 ms\n[qwen4-prof] ple gather S=1: 0.14 ms\n[qwen4-prof] ple gather S=1: 0.17 ms\n[qwen4-prof] ple gather S=1: 0.16 ms\n[qwen4-prof] ple gather S=1: 0.18 ms\n[qwen4-prof] ple gather S=1: 0.16 ms\n[qwen4-prof] ple gather S=1: 0.17 ms\n[qwen4-prof] ple gather S=1: 0.19 ms\n  [qsa-arms] qsa=decode_gather calls=252 mask=0 decode=156 verify=0 prefill=96\n  <- 62176+10 tokens (29081ms) [prefill: 2154.0 tok/s, decode: 50.5 tok/s] [stop]\n",
+          "usage": {
+            "prompt_tokens": 62176,
+            "completion_tokens": 10,
+            "total_tokens": 62186,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "answer": "MAGNOLIA-7731"
+        }
+      ]
+    }
+  ],
+  "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+  "settings": {
+    "ctx": 131072,
+    "prefill_chunk": 8192,
+    "prefix_cache_entries": 0,
+    "kv_quant": "off",
+    "mtp": false,
+    "pld": false,
+    "temperature": 0,
+    "seed": 1234,
+    "max_tokens": 32
+  }
+}
