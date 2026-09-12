@@ -1,0 +1,112 @@
+llmprobe v0.6.6 · probing http://127.0.0.1:11234
+
+  ✓ /v1/models               HTTP 200
+  ✓ chat/completions         HTTP 400
+  ✓ responses                HTTP 400
+  ✓ messages                 HTTP 400
+  ✗ messages/count_tokens    endpoint not found
+  ✓ embeddings               HTTP 400
+  ✓ completions (legacy)     HTTP 400
+  ✓ images/generations       HTTP 400
+  ✓ images/edits             HTTP 400
+  ✓ audio/speech             HTTP 400
+  ✗ audio/transcriptions     endpoint not found
+  ○ Ollama-compatible /api/chat detected, not scored
+  ○ Ollama-compatible /api/tags detected, not scored
+
+model: ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit   depth: default   reasoning model — +1024 token headroom
+
+
+benchmarking (warmup + median of 3)...
+  decode length probe
+  decode length probe       discarded
+  decode warmup             discarded
+  decode 1/3                54.4 tok/s
+  decode 2/3                52.9 tok/s
+  decode 3/3                54.2 tok/s
+  prefill warmup            discarded
+  prefill 1/3               1425.7 tok/s
+  prefill 2/3               1477.2 tok/s
+  prefill 3/3               1541.9 tok/s
+  spec:predictable warmup   discarded
+  spec:predictable 1/3      56.1 tok/s
+  spec:predictable 2/3      53.3 tok/s
+  spec:predictable 3/3      53.4 tok/s
+  spec:novel warmup         discarded
+  spec:novel 1/3            51.2 tok/s
+  spec:novel 2/3            52.9 tok/s
+  spec:novel 3/3            53.6 tok/s
+  prefix cache cold
+  prefix cache warm
+  batching 1 stream
+  batching 4 streams
+  context calibrating
+  context ~4.1k 1/3
+  context ~4.1k ceiling 1/3
+  context ~4.1k 2/3
+  context ~4.1k ceiling 2/3
+  context ~4.1k 3/3
+  context ~4.1k ceiling 3/3
+       ~4.2k  50 tok/s decode · 1489 tok/s prefill · 2.8s first token · 1.01 tok/step
+  context ~8.2k 1/3
+  context ~8.2k ceiling 1/3
+  context ~8.2k 2/3
+  context ~8.2k ceiling 2/3
+  context ~8.2k 3/3
+  context ~8.2k ceiling 3/3
+       ~8.2k  50.5 tok/s decode · 1623 tok/s prefill · 5.1s first token · 1.01 tok/step
+  context ~16.4k 1/3
+  context ~16.4k ceiling 1/3
+  context ~16.4k 2/3
+  context ~16.4k ceiling 2/3
+  context ~16.4k 3/3
+  context ~16.4k ceiling 3/3
+      ~16.3k  50.8 tok/s decode · 1735 tok/s prefill · 9.4s first token · 1.01 tok/step
+  context ~65.5k 1/3
+  context ~65.5k ceiling 1/3
+  context ~65.5k 2/3
+  context ~65.5k ceiling 2/3
+  context ~65.5k 3/3
+  context ~65.5k ceiling 3/3
+      ~65.8k  50.9 tok/s decode · 1761 tok/s prefill · 37.3s first token · 1.01 tok/step
+  context ~131.1k 1/3
+  context ~131.1k ceiling 1/3
+  context ~131.1k 2/3
+  context ~131.1k ceiling 2/3
+  context ~131.1k 3/3
+  context ~131.1k ceiling 3/3
+     ~131.1k  49.1 tok/s decode · 1771 tok/s prefill · 74.0s first token · 1.01 tok/step
+  sustained load
+  benchmark used 1,376,958 tokens (1,367,679 in · 9,279 out) over 58 requests
+json report → <workspace>/work/pr408-reviewed-ladder/1-on.json
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ llmprobe · http://127.0.0.1:11234/v1 · mlx-serve · ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit
+ label 1-on
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PERFORMANCE
+  informational — not scored; hardware-dependent, same-machine comparisons only
+  machine: Apple M5 Max · 128 GB · darwin arm64
+  sustained load: steady — 54.2 → 56.8 tok/s over 15m 44s (+4.8%)
+  decode length forced to 192 tokens (ignore_eos + min_tokens) — decode and drift figures compare equal work
+  ⚠ custom setup: 3 runs per scenario, rungs 4k, 8k, 16k, 64k, 128k — not comparable to default runs
+  Decode throughput     54.2 tok/s (52.9–54.4)
+  Time to first token   299 ms (289–307)
+  Prefill throughput    1477.2 tok/s (1425.7–1541.9)  (2043-token prompt)
+  Context scaling  decode · first-token latency · speculation vs prompt size
+     ~4.2k   50 tok/s     2.8s        1.01 tok/step · 1.03× ceiling · 1.01 tok/step at ceiling
+     ~8.2k   50.5 tok/s   5.1s        1.01 tok/step · 1.01× ceiling · 1.01 tok/step at ceiling
+    ~16.3k   50.8 tok/s   9.4s        1.01 tok/step · 1.01× ceiling · 1.01 tok/step at ceiling
+    ~65.8k   50.9 tok/s   37.3s       1.01 tok/step · 1.01× ceiling · 1.01 tok/step at ceiling
+   ~131.1k   49.1 tok/s   74.0s       1.01 tok/step · 1.01× ceiling · 1.01 tok/step at ceiling
+  Prefix cache          not detected  1.1× (1.4s cold → 1.2s warm)
+    usage reports 0 of 1542 prompt tokens cached
+  Concurrency (4)       partial  0.44 efficiency
+    87 tok/s aggregate vs 48.9 alone · slowest first token 859 ms
+  Speculative decode    1.01× — none detected
+    predictable 53.4 tok/s · novel 52.9 tok/s
+    1.01 tokens per decode step
+    (reasoning model — the thinking phase is novel, so this understates real gains)
+
+  1,377,322 tokens (1,368,014 in · 9,308 out) · 16m 5s

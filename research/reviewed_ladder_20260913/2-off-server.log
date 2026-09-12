@@ -1,0 +1,404 @@
+[mem] MLX buffer-pool cap 8192 MB (was 124518 MB)
+Logging to <home>/.mlx-serve/logs/mlx-serve-11234.log (rotates at 32 MB)
+mlx-serve 26.9.3-dev (MLX 0.32.2)
+[args] model: 
+[args] drafter: <none>
+[args] serve: 127.0.0.1:11234, ctx-size=262144, pld=off, no-vision=false, prevent-sleep=true
+[args] kv-quant: off
+[args] kv-attn-mode: auto
+Metal GPU: true
+mlx-serve 26.9.3-dev (headless — models load on demand)
+[args] serve: 127.0.0.1:11234
+[registry] max_resident_models=3, max_resident_mem=86.0 GB
+Headless: no primary model loaded; models load on demand.
+Context size: 262144 tokens (manual)
+Request timeout: 300s
+Model context length: 4096 tokens
+Reasoning budget: unlimited
+
+Server listening on http://127.0.0.1:11234
+  GET  /
+  GET  /health
+  GET  /props
+  GET  /v1/models
+  POST /v1/chat/completions
+  POST /v1/completions
+  POST /v1/embeddings
+  POST /v1/messages (Anthropic)
+  POST /v1/responses (OpenAI Responses)
+  POST /v1/responses/compact
+  GET  /v1/responses/{id}
+  DEL  /v1/responses/{id}
+  POST /tokenize
+  POST /detokenize
+
+RSS: 20M  Mem: 25%  CPU: 11%  GPU: 54%
+  parsed tokenizer (12 MB) in 49ms
+  loaded 248044 vocab entries in 5ms
+  loaded 247587 merges in 8ms
+Tokenizer loaded: 248077 vocab, 247587 merges, 33 special tokens (byte-level BPE)
+[preflight] weights ~70.13 GB, available 106.31 GB
+Loading model-00070.safetensors...
+Loading model-00042.safetensors...
+Loading model-00032.safetensors...
+Loading model-00091.safetensors...
+Loading model-00084.safetensors...
+Loading model-00079.safetensors...
+Loading model-00009.safetensors...
+Loading model-00057.safetensors...
+Loading model-00027.safetensors...
+Loading model-00015.safetensors...
+Loading model-00065.safetensors...
+Loading model-00098.safetensors...
+Loading model-00022.safetensors...
+Loading model-00052.safetensors...
+Loading model-00081.safetensors...
+Loading model-00060.safetensors...
+Loading model-00010.safetensors...
+Loading model-00088.safetensors...
+Loading model-00075.safetensors...
+Loading model-00005.safetensors...
+Loading model-00019.safetensors...
+Loading model-vision.safetensors...
+Loading model-00069.safetensors...
+Loading model-00094.safetensors...
+Loading model-00037.safetensors...
+Loading model-00047.safetensors...
+Loading model-00034.safetensors...
+Loading model-00044.safetensors...
+Loading model-00097.safetensors...
+Loading model-00076.safetensors...
+Loading model-00006.safetensors...
+Loading model-00058.safetensors...
+Loading model-00028.safetensors...
+Loading model-00063.safetensors...
+Loading model-00013.safetensors...
+Loading model-00082.safetensors...
+Loading model-00021.safetensors...
+Loading model-00051.safetensors...
+Loading model-00016.safetensors...
+Loading model-00066.safetensors...
+Loading model-00038.safetensors...
+Loading model-00048.safetensors...
+Loading model-00054.safetensors...
+Loading model-00024.safetensors...
+Loading model-00087.safetensors...
+Loading model-00092.safetensors...
+Loading model-00041.safetensors...
+Loading model-00031.safetensors...
+Loading model-00003.safetensors...
+Loading model-00073.safetensors...
+Loading model-00095.safetensors...
+Loading model-00068.safetensors...
+Loading model-00018.safetensors...
+Loading model-00046.safetensors...
+Loading model-00036.safetensors...
+Loading model-00004.safetensors...
+Loading model-00074.safetensors...
+Loading model-00089.safetensors...
+Loading model-00011.safetensors...
+Loading model-00061.safetensors...
+Loading model-00053.safetensors...
+Loading model-00023.safetensors...
+Loading model-00080.safetensors...
+Loading model-00099.safetensors...
+Loading model-00064.safetensors...
+Loading model-00014.safetensors...
+Loading model-00008.safetensors...
+Loading model-00078.safetensors...
+Loading model-00085.safetensors...
+Loading model-00026.safetensors...
+Loading model-00056.safetensors...
+Loading model-00033.safetensors...
+Loading model-00043.safetensors...
+Loading model-00090.safetensors...
+Loading model-00071.safetensors...
+Loading model-00001.safetensors...
+Loading model-00072.safetensors...
+Loading model-00002.safetensors...
+Loading model-00093.safetensors...
+Loading model-00030.safetensors...
+Loading model-00040.safetensors...
+Loading model-00025.safetensors...
+Loading model-00055.safetensors...
+Loading model-00086.safetensors...
+Loading model-00067.safetensors...
+Loading model-00017.safetensors...
+Loading model-00049.safetensors...
+Loading model-00039.safetensors...
+Loading model-00083.safetensors...
+Loading model-00050.safetensors...
+Loading model-00020.safetensors...
+Loading model-00012.safetensors...
+Loading model-00100.safetensors...
+Loading model-00062.safetensors...
+Loading model-00007.safetensors...
+Loading model-00077.safetensors...
+Loading model-00029.safetensors...
+Loading model-00059.safetensors...
+Loading model-00045.safetensors...
+Loading model-00035.safetensors...
+Loading model-00096.safetensors...
+Loaded 3167 weights from 101 file(s)
+[qsa-score] engaged (S=16 nb=700 layout=base nsg=4 nsh=22) — MLX_SERVE_QSA_SCORE_FUSED=0 restores the composed chain
+Precomputing MoE layer weights...
+Batch eval all weights: 6479ms
+[qwen4] ngram table warm: started, 29.8 GB in the background (page cache; MLX_SERVE_NGRAM_WARM=0 disables)
+Precomputing MoE layer weights...
+[qwen4] MTP head loaded (1 hyper-connected QSA+MoE layer; drafts armed by --mtp)
+[qwen4] n-gram table 320001536 rows x 160 (4-bit, mmapped), PLE at layer 1, QSA budget 2048/4
+[suppress] 14 of 21 flagged specials masked from sampling (template + eos exempt); 243 padding rows past id 248077 of 248320
+[qwen4] ngram table warm: 8.0/29.8 GB after 1 s
+[qwen4] ngram table warm: 16.0/29.8 GB after 2 s
+[wired] mode=max limit=110100 MB
+MoE routing compiled (kernel fusion enabled)
+GDN gate compiled (kernel fusion enabled)
+[qwen4] hyper-connection tails compiled (4/4 kernels)
+[vision] qwen tower prefix: model.visual.
+[vision] qwen patch_embed layout: channels_first
+Vision encoder: Qwen3-VL ViT (depth=27, hidden=1152, heads=16, merge=2, out_hidden=2560)
+[qwen4] ngram table warm: 24.0/29.8 GB after 3 s
+[qwen4] ngram table warm: done, 29.8 GB in 3.2 s (page cache; MLX_SERVE_NGRAM_WARM=0 disables)
+[qwen4] MTP draft rerank: coarse lm_head 3-bit (265 MB, 4487 ms) + exact top-32 rescoring (MLX_SERVE_MTP_DRAFT_RERANK=0 restores full-vocab drafts)
+[dtype-trace] qwen4: residual in = bfloat16, first weight = uint32
+[qwen4] fused hyper-connection read engaged: hc=4 hidden=2560 lowrank=320 8-bit g64 (MLX_SERVE_HC_FUSED=0 restores the chain)
+[moe] fused router kernel engaged: mode=softmax E=512 K=10 tg=256
+[moe] fused gate+up+SwiGLU kernel engaged: E_topk=10 inter=640 bits=4 gs=64
+[moe] fused down+reduce kernel engaged: E_topk=10 inter=640 hidden=2560 bits=4 gs=64
+[moe] gather-qmv kernel engaged: E_topk=10 inter=640 hidden=2560 bits=4 gs=64
+[mlp] fused SwiGLU kernel engaged: n=640 tg=256
+[attn] fused QK-norm+RoPE (hd-256) engaged: hq=24 hk=2 S=1 rd=64
+[dtype-trace] qwen4: residual out = bfloat16
+[vqmm] NAX verify lane engaged at 8-bit: M=8 K=2560 N=10240 gs=64 min_m=7 (MLX_SERVE_VERIFY_QMM_NAX=0 restores stock)
+[qwen4] PLE prefill gather: SERIAL mmap walk (warmup width: 128 rows; the pool engages past kv 262144, QWEN4_PLE_PREFETCH_PREFILL_MIN_KV overrides)
+[nax-sdpa] engaged: stock fused sdpa (force_fused) serves hd-256 causal prefill and verify blocks > 8 rows; msv_attn_p256 causal arm declined (MLX_SERVE_NAX_SDPA=0 restores)
+[sdpa-split] engaged: qL=8 kL=8 Hq=24 Hkv=2 (MLX_SERVE_SDPA_SPLIT=0 restores the single dispatch)
+Warmup complete (79 ms).
+[registry] default model -> ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit (first chat-capable load on a headless server)
+[registry] model id=ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit ready (70.13 GB resident)
+[wired] mode=max limit=110100 MB
+POST /v1/chat/completions (1 msgs, max_tokens=16, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=40b, tools=0b, tool_msgs=0) 
+  > "Capital of France? Answer with one word."
+[admission] needed=658 MB available=38312 MB reclaimable=0 MB width=8192 verdict=admit
+  prompt=21 tokens, max_gen=16, ctx=262144
+[nax-sdpa] force_fused dispatch engaged: qL=20 kL=20 Hq=24 Hkv=2 hd=256
+[gdn] packed prework engaged: Hk=16 Hv=48 S=1 B=1
+[gdn] fused norm-gate engaged: Hv=48 S=1 gate=sigmoid
+  [prefill-trace] tokens=21 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=11ms eval=81ms last_token=1ms total=94ms
+[short-gen] reason=stop emitted=1 realized=1 ids=[57590] bytes="Paris" path=serial
+  <- 21+1 tokens (166ms) [prefill: 185.1 tok/s, decode: 27.8 tok/s] [stop]
+POST /v1/chat/completions -> 400 (missing messages)
+POST /v1/completions -> 400 (missing prompt)
+POST /api/chat -> 400 (invalid request)
+POST /v1/chat/completions (1 msgs, max_tokens=512, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=42b, tools=0b, tool_msgs=0) 
+  > "What is 2 + 2? Reply with just the number."
+  prompt=26 tokens, max_gen=512, ctx=262144
+  [prefill-trace] tokens=26 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=4ms eval=87ms last_token=1ms total=92ms
+[short-gen] reason=stop emitted=1 realized=1 ids=[19] bytes="4" path=serial
+  <- 26+1 tokens (164ms) [prefill: 233.5 tok/s, decode: 27.9 tok/s] [stop]
+POST /v1/chat/completions (1 msgs, max_tokens=512, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=true, sys=0b, user=42b, tools=197b, tool_msgs=0) 
+  > "What is 2 + 2? Reply with just the number."
+  prompt=309 tokens, max_gen=512, ctx=262144
+[qwen4] PLE prefill gather: SERIAL mmap walk (prefill width: 4928 rows; the pool engages past kv 262144, QWEN4_PLE_PREFETCH_PREFILL_MIN_KV overrides)
+  [prefill-trace] tokens=309 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=395ms eval=1ms last_token=1ms total=398ms
+  <- 309+28 tokens (941ms) [prefill: 740.7 tok/s, decode: 55.2 tok/s] [stop]
+POST /v1/chat/completions (1 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=235b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-0] Write a TypeScript function `retryWithBackoff<T>(fn, options)..."
+  prompt=67 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=67 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=192ms eval=1ms last_token=1ms total=195ms
+  <- 67+192 tokens streamed [prefill: 313.1 tok/s, decode: 56.8 tok/s] [length]
+POST /v1/chat/completions (1 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=235b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-1] Write a TypeScript function `retryWithBackoff<T>(fn, options)..."
+  prompt=67 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=67 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=201ms eval=5ms last_token=2ms total=209ms
+  <- 67+192 tokens streamed [prefill: 294.0 tok/s, decode: 57.7 tok/s] [length]
+POST /v1/chat/completions (1 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=235b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-2] Write a TypeScript function `retryWithBackoff<T>(fn, options)..."
+  prompt=67 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=67 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=191ms eval=5ms last_token=1ms total=198ms
+  <- 67+192 tokens streamed [prefill: 308.1 tok/s, decode: 57.2 tok/s] [length]
+POST /v1/chat/completions (1 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=235b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-3] Write a TypeScript function `retryWithBackoff<T>(fn, options)..."
+  prompt=67 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=67 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=191ms eval=5ms last_token=1ms total=199ms
+  <- 67+192 tokens streamed [prefill: 307.5 tok/s, decode: 56.7 tok/s] [length]
+POST /v1/chat/completions (1 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=235b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-4] Write a TypeScript function `retryWithBackoff<T>(fn, options)..."
+  prompt=67 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=67 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=194ms eval=5ms last_token=1ms total=202ms
+  <- 67+192 tokens streamed [prefill: 303.4 tok/s, decode: 57.5 tok/s] [length]
+POST /v1/chat/completions (1 msgs, max_tokens=8, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=8242b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-5] [0] The archive records the following entry. [1] The archive ..."
+  prompt=2042 tokens, max_gen=8, ctx=262144
+  [prefill-trace] tokens=2042 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=1390ms eval=7ms last_token=1ms total=1399ms
+[short-gen] reason=stop emitted=1 realized=1 ids=[3793] bytes="OK" path=serial
+  <- 2042+1 tokens streamed [prefill: 1433.1 tok/s, decode: 25.6 tok/s] [stop]
+POST /v1/chat/completions (1 msgs, max_tokens=8, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=8242b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-6] [0] The archive records the following entry. [1] The archive ..."
+  prompt=2042 tokens, max_gen=8, ctx=262144
+  [prefill-trace] tokens=2042 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=1312ms eval=3ms last_token=1ms total=1317ms
+[short-gen] reason=stop emitted=1 realized=1 ids=[3793] bytes="OK" path=serial
+  <- 2042+1 tokens streamed [prefill: 1526.9 tok/s, decode: 27.2 tok/s] [stop]
+POST /v1/chat/completions (1 msgs, max_tokens=8, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=8242b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-7] [0] The archive records the following entry. [1] The archive ..."
+  prompt=2042 tokens, max_gen=8, ctx=262144
+  [prefill-trace] tokens=2042 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=1248ms eval=2ms last_token=1ms total=1253ms
+[short-gen] reason=stop emitted=1 realized=1 ids=[3793] bytes="OK" path=serial
+  <- 2042+1 tokens streamed [prefill: 1603.2 tok/s, decode: 26.2 tok/s] [stop]
+POST /v1/chat/completions (1 msgs, max_tokens=8, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=8242b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-8] [0] The archive records the following entry. [1] The archive ..."
+  prompt=2042 tokens, max_gen=8, ctx=262144
+  [prefill-trace] tokens=2042 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=1240ms eval=2ms last_token=1ms total=1244ms
+[short-gen] reason=stop emitted=1 realized=1 ids=[3793] bytes="OK" path=serial
+  <- 2042+1 tokens streamed [prefill: 1613.0 tok/s, decode: 25.7 tok/s] [stop]
+POST /v1/chat/completions (2 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=79b, user=1164b, tools=0b, tool_msgs=0) 
+  > "The old lighthouse stood at the edge of the rocky cliff, its white paint weather..."
+  prompt=284 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=284 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=375ms eval=2ms last_token=1ms total=379ms
+  <- 284+192 tokens streamed [prefill: 712.7 tok/s, decode: 57.8 tok/s] [length]
+POST /v1/chat/completions (2 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=79b, user=1164b, tools=0b, tool_msgs=0) 
+  > "The old lighthouse stood at the edge of the rocky cliff, its white paint weather..."
+  prompt=283 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=283 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=322ms eval=6ms last_token=1ms total=330ms
+  <- 283+192 tokens streamed [prefill: 809.6 tok/s, decode: 57.2 tok/s] [length]
+POST /v1/chat/completions (2 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=79b, user=1164b, tools=0b, tool_msgs=0) 
+  > "The old lighthouse stood at the edge of the rocky cliff, its white paint weather..."
+  prompt=283 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=283 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=332ms eval=6ms last_token=1ms total=340ms
+  <- 283+192 tokens streamed [prefill: 786.3 tok/s, decode: 57.2 tok/s] [length]
+POST /v1/chat/completions (2 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=79b, user=1164b, tools=0b, tool_msgs=0) 
+  > "The old lighthouse stood at the edge of the rocky cliff, its white paint weather..."
+  prompt=283 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=283 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=330ms eval=6ms last_token=1ms total=338ms
+  <- 283+192 tokens streamed [prefill: 791.5 tok/s, decode: 57.5 tok/s] [length]
+POST /v1/chat/completions (1 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=115b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-d] Invent an original, surprising paragraph of stream-of-conscio..."
+  prompt=38 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=38 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=129ms eval=5ms last_token=1ms total=136ms
+  <- 38+174 tokens streamed [prefill: 244.8 tok/s, decode: 57.2 tok/s] [stop]
+POST /v1/chat/completions (1 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=115b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-e] Invent an original, surprising paragraph of stream-of-conscio..."
+  prompt=38 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=38 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=127ms eval=5ms last_token=1ms total=134ms
+  <- 38+176 tokens streamed [prefill: 248.5 tok/s, decode: 56.4 tok/s] [stop]
+POST /v1/chat/completions (1 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=115b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-f] Invent an original, surprising paragraph of stream-of-conscio..."
+  prompt=38 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=38 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=129ms eval=5ms last_token=1ms total=136ms
+  <- 38+170 tokens streamed [prefill: 244.7 tok/s, decode: 57.4 tok/s] [stop]
+POST /v1/chat/completions (1 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=115b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-g] Invent an original, surprising paragraph of stream-of-conscio..."
+  prompt=38 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=38 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=130ms eval=5ms last_token=1ms total=137ms
+  <- 38+192 tokens streamed [prefill: 244.2 tok/s, decode: 57.4 tok/s] [length]
+POST /v1/chat/completions (1 msgs, max_tokens=8, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=6194b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-h] [0] Operations handbook, section on shift handover. [1] Opera..."
+  prompt=1541 tokens, max_gen=8, ctx=262144
+  [prefill-trace] tokens=1541 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=1000ms eval=6ms last_token=1ms total=1008ms
+[short-gen] reason=stop emitted=1 realized=1 ids=[3793] bytes="OK" path=serial
+  <- 1541+1 tokens streamed [prefill: 1496.4 tok/s, decode: 26.2 tok/s] [stop]
+POST /v1/chat/completions (1 msgs, max_tokens=8, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=6194b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-h] [0] Operations handbook, section on shift handover. [1] Opera..."
+  prompt=1541 tokens, max_gen=8, ctx=262144
+  [prefill-trace] tokens=1541 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=986ms eval=2ms last_token=1ms total=990ms
+[short-gen] reason=stop emitted=1 realized=1 ids=[3793] bytes="OK" path=serial
+  <- 1541+1 tokens streamed [prefill: 1524.2 tok/s, decode: 25.3 tok/s] [stop]
+POST /v1/chat/completions (1 msgs, max_tokens=96, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=141b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-i] Write a short descriptive paragraph. Subject number 0: a harb..."
+  prompt=50 tokens, max_gen=96, ctx=262144
+  [prefill-trace] tokens=50 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=166ms eval=1ms last_token=1ms total=169ms
+  <- 50+96 tokens streamed [prefill: 265.5 tok/s, decode: 56.6 tok/s] [length]
+POST /v1/chat/completions (1 msgs, max_tokens=96, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=141b, tools=0b, tool_msgs=0) 
+POST /v1/chat/completions (1 msgs, max_tokens=96, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=141b, tools=0b, tool_msgs=0) 
+POST /v1/chat/completions (1 msgs, max_tokens=96, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=141b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-k] Write a short descriptive paragraph. Subject number 2: a harb..."
+  > "[probe mtyvrnl0-l] Write a short descriptive paragraph. Subject number 3: a harb..."
+  > "[probe mtyvrnl0-j] Write a short descriptive paragraph. Subject number 1: a harb..."
+  prompt=50 tokens, max_gen=96, ctx=262144
+  prompt=50 tokens, max_gen=96, ctx=262144
+  prompt=50 tokens, max_gen=96, ctx=262144
+POST /v1/chat/completions (1 msgs, max_tokens=96, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=141b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-m] Write a short descriptive paragraph. Subject number 4: a harb..."
+  prompt=50 tokens, max_gen=96, ctx=262144
+  [prefill-trace] tokens=50 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=155ms eval=3ms last_token=1ms total=160ms
+  [prefill-trace] tokens=50 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=163ms eval=1ms last_token=1ms total=165ms
+[batched] gdn batched decode engaged (slots=2)
+  [prefill-trace] tokens=50 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=157ms eval=1ms last_token=1ms total=161ms
+  [prefill-trace] tokens=50 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=162ms eval=1ms last_token=1ms total=165ms
+  <- 50+96 tokens streamed [prefill: 279.1 tok/s, decode: 28.6 tok/s] [length]
+  <- 50+96 tokens streamed [prefill: 271.3 tok/s, decode: 28.2 tok/s] [length]
+  <- 50+96 tokens streamed [prefill: 278.2 tok/s, decode: 28.2 tok/s] [length]
+  <- 50+96 tokens streamed [prefill: 270.7 tok/s, decode: 28.0 tok/s] [length]
+POST /v1/chat/completions (1 msgs, max_tokens=1, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=2462b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-n] // src/order/resolve.ts
+import { Clock } from "../runtime/clo..."
+  prompt=694 tokens, max_gen=1, ctx=262144
+  [prefill-trace] tokens=694 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=690ms eval=6ms last_token=2ms total=699ms
+[short-gen] reason=length emitted=1 realized=1 ids=[71093] bytes="```" path=serial
+  <- 694+1 tokens streamed [prefill: 964.2 tok/s, decode: 50.6 tok/s] [length]
+POST /v1/chat/completions (1 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=235476b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-o] // src/order/resolve.ts
+import { Clock } from "../runtime/clo..."
+  prompt=68651 tokens, max_gen=192, ctx=262144
+[qsa] sparse attention engaged: kv=8192 blocks=2048 top-512 (budget 2048, ratio 4)
+[qsa-select] engaged (S=8192 nb=2048 k=512 tg=256) — MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain
+[qsa-fused] engaged: msv_attn_p256 mask arm qL=8192 kL=8192 Hq=24 Hkv=2 (MLX_SERVE_QSA_FUSED=0 restores stock sdpa)
+[qsa-gather] engaged: msv_qsa_nax_precise S=8192 kv=16384 blocks=512 bk=32 tgmem=20992 (MLX_SERVE_QSA_NAX=0 restores the stock gather)
+[qsa-score] engaged (S=1 nb=17162 layout=base nsg=4 nsh=537) — MLX_SERVE_QSA_SCORE_FUSED=0 restores the composed chain
+[qsa-select] engaged (S=1 nb=17162 k=512 tg=1024) — MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain
+[qsa-decode-gather] engaged (S=1 kv=68651 rows=2051) (MLX_SERVE_QSA_DECODE_GATHER=0 restores the dense mask arm)
+  [prefill-trace] tokens=68651 chunks=9 chunk_size=8192 chunk_widths=8192..8192 chunked=43206ms eval=63ms last_token=5ms total=43275ms
+  [qsa-arms] qsa=decode_gather calls=2424 mask=12 decode=2316 verify=0 prefill=96
+  <- 68651+192 tokens streamed [prefill: 1585.4 tok/s, decode: 48.3 tok/s] [length]
+POST /v1/chat/completions (1 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=235302b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-o] // src/order/resolve.ts
+import { Clock } from "../runtime/clo..."
+  prompt=68618 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=68618 chunks=9 chunk_size=8192 chunk_widths=8192..8192 chunked=43048ms eval=66ms last_token=4ms total=43120ms
+  [qsa-arms] qsa=decode_gather calls=2424 mask=12 decode=2316 verify=0 prefill=96
+  <- 68618+192 tokens streamed [prefill: 1590.3 tok/s, decode: 50.8 tok/s] [length]
+POST /v1/chat/completions (1 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=235476b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-p] // src/order/resolve.ts
+import { Clock } from "../runtime/clo..."
+  prompt=68651 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=68651 chunks=9 chunk_size=8192 chunk_widths=8192..8192 chunked=44086ms eval=65ms last_token=1ms total=44154ms
+  [qsa-arms] qsa=decode_gather calls=2424 mask=12 decode=2316 verify=0 prefill=96
+  <- 68651+192 tokens streamed [prefill: 1553.9 tok/s, decode: 50.0 tok/s] [length]
+POST /v1/chat/completions (1 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=235302b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-p] // src/order/resolve.ts
+import { Clock } from "../runtime/clo..."
+  prompt=68618 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=68618 chunks=9 chunk_size=8192 chunk_widths=8192..8192 chunked=43226ms eval=66ms last_token=1ms total=43295ms
+  [qsa-arms] qsa=decode_gather calls=2424 mask=12 decode=2316 verify=0 prefill=96
+  <- 68618+192 tokens streamed [prefill: 1584.0 tok/s, decode: 49.9 tok/s] [length]
+POST /v1/chat/completions (1 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=235476b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-q] // src/order/resolve.ts
+import { Clock } from "../runtime/clo..."
+  prompt=68651 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=68651 chunks=9 chunk_size=8192 chunk_widths=8192..8192 chunked=43732ms eval=67ms last_token=2ms total=43802ms
+  [qsa-arms] qsa=decode_gather calls=2424 mask=12 decode=2316 verify=0 prefill=96
+  <- 68651+192 tokens streamed [prefill: 1566.4 tok/s, decode: 50.4 tok/s] [length]
+POST /v1/chat/completions (1 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=235302b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-q] // src/order/resolve.ts
+import { Clock } from "../runtime/clo..."
+  prompt=68618 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=68618 chunks=9 chunk_size=8192 chunk_widths=8192..8192 chunked=42976ms eval=67ms last_token=2ms total=43046ms
+  [qsa-arms] qsa=decode_gather calls=2424 mask=12 decode=2316 verify=0 prefill=96
+  <- 68618+192 tokens streamed [prefill: 1593.1 tok/s, decode: 50.5 tok/s] [length]
+POST /v1/chat/completions (1 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=235b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-r] Write a TypeScript function `retryWithBackoff<T>(fn, options)..."
+  prompt=66 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=66 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=927ms eval=1ms last_token=1ms total=930ms
+  <- 66+192 tokens streamed [prefill: 69.1 tok/s, decode: 56.5 tok/s] [length]
+POST /v1/chat/completions (1 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=235b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-s] Write a TypeScript function `retryWithBackoff<T>(fn, options)..."
+  prompt=66 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=66 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=192ms eval=5ms last_token=1ms total=199ms
+  <- 66+192 tokens streamed [prefill: 302.5 tok/s, decode: 57.5 tok/s] [length]
+POST /v1/chat/completions (1 msgs, max_tokens=192, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, sys=0b, user=235b, tools=0b, tool_msgs=0) 
+  > "[probe mtyvrnl0-t] Write a TypeScript function `retryWithBackoff<T>(fn, options)..."
+  prompt=66 tokens, max_gen=192, ctx=262144
+  [prefill-trace] tokens=66 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=193ms eval=5ms last_token=1ms total=200ms
+  <- 66+192 tokens streamed [prefill: 300.4 tok/s, decode: 58.4 tok/s] [length]
+
+Shutting down gracefully...

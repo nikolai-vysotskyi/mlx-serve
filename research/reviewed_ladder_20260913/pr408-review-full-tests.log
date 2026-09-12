@@ -1,0 +1,74 @@
+test
++- run test w
+[think-gate] 4000 tokens to 101 KB: fresh >= 203203 KB scanned, memoized 164 KB (1238x)
+[replay] 4911 records, 4501 calls, 142 repaired, 31 non-conforming (broken JSON), 4 soft wrapper-leaks, 0 HARD failures
+fused hc read: n=512 cos=0.999984 worst diff/tol=0.00 ref=0.00000 got=0.00000
+fused hc read: n=4 cos=1.000000 worst diff/tol=0.00 ref=0.00000 got=0.00000
+fused hc read: n=2048 cos=1.000000 worst diff/tol=0.00 ref=0.00000 got=0.00000
+fused hc read: n=512 cos=1.000000 worst diff/tol=0.00 ref=0.00000 got=0.00000
+fused hc read: n=4 cos=1.000000 worst diff/tol=0.00 ref=0.00000 got=0.00000
+[nax-probe] arch=applegpu_g17s macos=26.5 available=true
+max_stock=4.8820674e-4 max_nax=4.8820674e-4 floor=4.9e-4 bar=7.323101e-4
+max_stock=9.766221e-4 max_nax=9.769201e-4 floor=4.9e-4 bar=1.4649332e-3
+[qsa-take-dequant] max abs diff 0
+[qsa-decode-gather] quant path max diff 0.000000
+[qsa-decode-gather] dense path max diff 0.000000
+[qsa-verify-gather] S=2 kv=4096 dense: max diff 0.000488 cos 0.9999975
+[qsa-verify-gather] S=2 kv=4096 affine-8: max diff 0.000488 cos 0.9999974
+[qsa-verify-gather] S=5 kv=4096 dense: max diff 0.000488 cos 0.9999965
+[qsa-verify-gather] S=5 kv=4096 affine-8: max diff 0.000488 cos 0.9999966
+[qsa-verify-gather] S=7 kv=20000 dense: max diff 0.000244 cos 0.9999948
+[qsa-verify-gather] S=7 kv=20000 affine-8: max diff 0.000244 cos 0.9999948
+[qsa-verify-gather] S=15 kv=20000 dense: max diff 0.000244 cos 0.9999948
+[qsa-verify-gather] S=15 kv=20000 affine-8: max diff 0.000244 cos 0.9999948
+[qsa-attn] S=1 kv=4096 kb=64 gqa=12 affine-8: max diff 0.000244 cos 0.9999969 (bar 0.000501)
+[qsa-attn] S=1 kv=70000 kb=512 gqa=12 affine-8: max diff 0.000122 cos 0.9999970 (bar 0.000183)
+[qsa-attn] S=3 kv=62000 kb=512 gqa=12 dense->union gather: max diff 0.000122 cos 0.9999948 (bar 0.000158)
+[qsa-attn] S=3 kv=62000 kb=512 gqa=12 affine-8: max diff 0.000122 cos 0.9999965 (bar 0.000157)
+[qsa-attn] S=2 kv=1024 kb=512 gqa=12 affine-8: max diff 0.000122 cos 0.9999967 (bar 0.000232)
+[qsa-attn] S=15 kv=70000 kb=512 gqa=12 dense->union gather: max diff 0.000122 cos 0.9999948 (bar 0.000207)
+[qsa-attn] S=15 kv=70000 kb=512 gqa=12 affine-8: max diff 0.000122 cos 0.9999965 (bar 0.000207)
+[qsa-attn] S=2 kv=4096 kb=64 gqa=12 affine-8: max diff 0.000244 cos 0.9999971 (bar 0.000489)
+[qsa-attn] S=6 kv=4096 kb=64 gqa=12 affine-8: max diff 0.000244 cos 0.9999964 (bar 0.000487)
+[qsa-attn] S=15 kv=4096 kb=64 gqa=12 affine-8: max diff 0.000488 cos 0.9999965 (bar 0.000543)
+[qsa-attn] S=6 kv=20000 kb=128 gqa=12 dense->union gather: max diff 0.000244 cos 0.9999948 (bar 0.000358)
+[qsa-attn] S=6 kv=20000 kb=128 gqa=12 affine-8: max diff 0.000244 cos 0.9999965 (bar 0.000358)
+[qsa-attn] S=15 kv=20000 kb=128 gqa=12 dense->union gather: max diff 0.000244 cos 0.9999948 (bar 0.000367)
+[qsa-attn] S=15 kv=20000 kb=128 gqa=12 affine-8: max diff 0.000244 cos 0.9999964 (bar 0.000365)
+[qsa-attn] S=2 kv=70000 kb=512 gqa=12 dense->union gather: max diff 0.000122 cos 0.9999952 (bar 0.000172)
+[qsa-attn] S=2 kv=70000 kb=512 gqa=12 affine-8: max diff 0.000122 cos 0.9999970 (bar 0.000172)
+[qsa-attn] S=6 kv=70000 kb=512 gqa=12 dense->union gather: max diff 0.000122 cos 0.9999947 (bar 0.000180)
+[qsa-attn] S=6 kv=70000 kb=512 gqa=12 affine-8: max diff 0.000122 cos 0.9999964 (bar 0.000180)
+[qsa-attn] S=6 kv=4096 kb=2048 gqa=12 affine-8: max diff 0.000061 cos 0.9999962 (bar 0.000114)
+[qsa-attn] nsplit=1: max diff 0.000244 cos 0.9999964 (bar 0.000398)
+[qsa-attn] nsplit=8: max diff 0.000244 cos 0.9999964 (bar 0.000398)
+[qsa-attn] nsplit=64: max diff 0.000244 cos 0.9999964 (bar 0.000398)
+[qsa-attn] 12 layers S=6 kv=20000: kernel 60 ops, union gather 768 ops (saved 708)
+[ane-chan] qmm slice: copy_err=0 view_err=0
+[fault] ownership shape: 6 checked ops, 6 faulted cleanly, leak oracle caught 5
+[gate probe] compiled vs chain max |diff| = 0e0
+[qsa-boundary] all-visible skip exercised in 55 cases
+[qsa-select] the chain differs from the exact rule in 140/8192 slots at production magnitude (tied blocks only)
+dsv4 moe gate+up bits=2: err composed=5.174e-2 fused=2.060e-2
+dsv4 moe gate+up bits=8: err composed=5.371e-3 fused=5.371e-3
+dsv4 moe gate+up bits=4: err composed=4.475e-2 fused=4.900e-2
+[conv-sanity] out shape [1,4,4,3]
+[conv-sanity] center=18 corner=8
+[conv-sanity-bf16] center=18 corner=8
+[flux-qgeo] bits=3 cos=1.000000
+[flux-qgeo] bits=4 cos=1.000000
+[flux-qgeo] bits=6 cos=1.000000
+[flux-qgeo] bits=8 cos=1.000000
+failed command: ./.zig-cache/o/cbf6d05b07199390c29dcf21822d42c9/test --cache-dir=./.zig-cache --seed=0xa48811 --listen=-
+
+Build Summary: 9/9 steps succeeded; 2330/2484 tests passed (154 skipped)
+test success
++- run test 2330 pass, 154 skip (2484 total) 3m MaxRSS:5G
+|  +- compile test debug native-native.26.2 success 28s MaxRSS:2G
+|     +- options cached
+|     +- translate-c cached 42ms MaxRSS:30M
+|     +- translate-c cached 44ms MaxRSS:30M
+|     +- translate-c cached 43ms MaxRSS:30M
++- run test cached
+   +- compile test debug native-native.26.2 cached 49ms MaxRSS:32M
+

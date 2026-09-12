@@ -1,0 +1,6 @@
+GPU acquired: qsa-pair-test-5067 (parent 5067)
+{"arm": "on", "usage": {"prompt_tokens": 13515, "completion_tokens": 10, "total_tokens": 13525, "prompt_tokens_details": {"cached_tokens": 0}}, "answer": "MAGNOLIA-7731"}
+{"arm": "on", "usage": {"prompt_tokens": 15715, "completion_tokens": 10, "total_tokens": 15725, "prompt_tokens_details": {"cached_tokens": 0}}, "answer": "MAGNOLIA-7731"}
+PASS: long prefill answers and expected QSA arm
+Logs: <workspace>/work/mlx-serve-prefill-pr/../pr408-review-integration/server.log
+GPU released: qsa-pair-test-5067
