@@ -1,0 +1,29 @@
+{
+  "commit": "1b1a4dfbfd3d5f5c2bc9c4e61963902d5089d918",
+  "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+  "binary_sha256": "1727d9395720c1e7013f9b041dde44b5a1e38aea6b8a5662ea8a69ae61959382",
+  "kind": "HTTP correctness and engagement smoke; no paired throughput control",
+  "request_tokens": [
+    13515,
+    15715
+  ],
+  "cached_tokens": [
+    0,
+    0
+  ],
+  "answers": [
+    "MAGNOLIA-7731",
+    "MAGNOLIA-7731"
+  ],
+  "server_prefill_tok_s": [
+    2038.8,
+    2436.7
+  ],
+  "engagement": [
+    "[hc-prefill] engaged: S=8192 B=1 pending=false native_inject=true",
+    "[gdn-prefill] engaged: S=8192 B=1 cold=true",
+    "[qsa-pair] engaged: S=8192 kv=8192 KB=512 B=1"
+  ],
+  "stdout": "GPU acquired: codex-prefill-50308 (parent 50308)\n{\"chunk\": 8192, \"loaded_s\": 14.933782459000213, \"ready\": \"Paris\"}\n{\"arm\": \"on\", \"usage\": {\"prompt_tokens\": 13515, \"completion_tokens\": 10, \"total_tokens\": 13525, \"prompt_tokens_details\": {\"cached_tokens\": 0}}, \"answer\": \"MAGNOLIA-7731\"}\n{\"arm\": \"on\", \"usage\": {\"prompt_tokens\": 15715, \"completion_tokens\": 10, \"total_tokens\": 15725, \"prompt_tokens_details\": {\"cached_tokens\": 0}}, \"answer\": \"MAGNOLIA-7731\"}\nPASS: long prefill answers and expected QSA arm\nGPU released: codex-prefill-50308\n",
+  "server_log_sha256": "558527b8bd13c17d8097c5ca5e5b8b2fd084b0757c02cccc90c315cffebe5936"
+}

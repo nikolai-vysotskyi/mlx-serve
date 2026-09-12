@@ -1,0 +1,8 @@
+Build Summary: 7/7 steps succeeded
+install success
++- install mlx-serve success
+   +- compile exe mlx-serve fast native-native.26.2 success 1m MaxRSS:4G
+      +- options cached
+      +- translate-c cached 38ms MaxRSS:30M
+      +- translate-c cached 44ms MaxRSS:30M
+      +- translate-c cached 42ms MaxRSS:30M

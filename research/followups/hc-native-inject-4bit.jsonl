@@ -1,0 +1,4 @@
+{"bits":4,"mode":0,"diffs":[0,0,0,0,0],"ms":6.42583}
+{"bits":4,"mode":3,"diffs":[0,0.0078125,0,0.0078125,0],"f64_raw_stock_max":0.00390679,"f64_raw_new_max":0.00390571,"gate_mismatches_new":0,"gate_mismatches_stock":1,"gates_checked":144,"ms":4.10658}
+{"bits":4,"mode":7,"diffs":[0,0,0,0,0],"ms":4.4295}
+{"bits":4,"mode":0,"diffs":[0,0,0,0,0],"ms":6.46367}

@@ -1,0 +1,10 @@
+Build Summary: 9/9 steps succeeded; 2329/2483 tests passed (154 skipped)
+test success
++- run test 2329 pass, 154 skip (2483 total) 3m MaxRSS:5G
+|  +- compile test debug native-native.26.2 success 27s MaxRSS:2G
+|     +- options cached
+|     +- translate-c cached 40ms MaxRSS:30M
+|     +- translate-c cached 42ms MaxRSS:30M
+|     +- translate-c cached 41ms MaxRSS:30M
++- run test cached
+   +- compile test debug native-native.26.2 cached 47ms MaxRSS:32M

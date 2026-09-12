@@ -2,6 +2,8 @@
 
 Updated 2026-09-12. Implementation: paired QSA + HC + cold/warm GDN prefill fusion (exact PR checkpoint in `pr-validation.json`), branch `perf/qwen-prefill-paired-qsa` in `nikolai-vysotskyi/mlx-serve`. Upstream `ddalcu/mlx-serve/main` was refreshed and is still `fa76a4b50b3f54af7e9cd927279f5ba2870f02c6`.
 
+Current production head is **`1b1a4df`**: it removes HC inject reduction-order drift while retaining fused write/norm/mix. Dense-weight regression was red before and green after; ReleaseFast and the full suite passed. The mixed HTTP correctness/engagement smoke passed at 13,515 and 15,715 uncached tokens (2038.8 / 2436.7 tok/s server observations, **no matched OFF arm or speedup claim**). All long-context figures below belong to **previous head `092ce2e`**, not this correction. [Details and raw evidence](followups/20260912-hc-native-inject.md).
+
 ## Objective and working style
 
 Use `ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit` for future reviewable model results: the maintainer requested this pack in [PR #375](https://github.com/ddalcu/mlx-serve/pull/375#issuecomment-5574309358). The original 4-bit cells below are retained as historical evidence. Never compare throughput across the two checkpoints as an optimization ratio.
@@ -17,8 +19,8 @@ Prefer analysis and implementation over repeated long tests. Seek changes that r
 1. **Paired QSA** partitions adjacent queries' selected blocks into private-left, private-right and shared buckets. Common K/V is staged once. Exact selected-key multisets, causal tails and the attention budget are preserved; softmax traversal/reduction order changes.
    - S4096/KV36864/Q24/KV2/D256, real captured block map and synthetic BF16 Q/K/V: stock 29.5954 / 29.5001 ms -> 14.1949 ms, **2.08× component**, including the GPU planner.
    - `qsa_pair/README.md`, `qsa_pair/probe.cpp`, `qsa_pair/validate.cpp` and raw JSONL files contain reproduction and numerical evidence.
-2. **HC write/read fusion** combines pending write, group RMS norm, norm weights and inject products; the last kernel mixes four streams without a full-width product buffer. Native projection GEMMs remain.
-   - M8192/HC4/H2560/rank320: stock 6.14867 / 6.12183 -> 3.91179 ms, **1.57× component**.
+2. **HC write/read fusion** combines pending write, group RMS norm and norm weights; the last kernel mixes four streams without a full-width product buffer. Current PR head restores native inject matmul to preserve its summation order after the M4 review. Native projection GEMMs remain.
+   - Historical fused-inject component: stock 6.14867 / 6.12183 -> 3.91179 ms. The corrected native-inject path measures 4.42950 ms versus stock 6.42583 / 6.46367 (4-bit), or 4.73458 ms versus 6.54479 / 6.62771 (8-bit); all five outputs match stock exactly in these fixtures. See [HC correction](followups/20260912-hc-native-inject.md).
    - BF16 write/norm/mix rounding is preserved. Inject reduction order changes. The float64 check covers 144 gates and is limited evidence, not a broad quality evaluation. See `hc_prefill/README.md`.
 3. **First-chunk routing**: the old 8192-key gather crossover was inherited from an unshared kernel. It excluded the first chunk even with paired QSA enabled. The dispatcher now lowers that floor for supported paired-prefill geometry. Explicit `MLX_SERVE_QSA_GATHER_MIN_KV` / test overrides and unsupported shapes retain their previous policy.
 

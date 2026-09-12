@@ -1,0 +1,25 @@
+test
++- run test 2 pass, 1 fail (3 total)
+error: 'transformer.test.hc prefill: pending write, normalized streams, native inject reduction and BF16 mix across shapes' failed:
+       expected 0, found 0.0000076293945
+       /Users/nikolai/mlx-serve/.zig-toolchain/lib/std/testing.zig:111:17: 0x102fc7a2b in expectEqualInner__anon_35153 (test)
+                       return error.TestExpectedEqual;
+                       ^
+       /Users/nikolai/mlx-serve/.zig-toolchain/lib/std/testing.zig:75:5: 0x102fca76b in expectEqual (test)
+           return expectEqualInner(T, expected, actual);
+           ^
+       /Users/nikolai/Documents/Codex/2026-09-07/files-mentioned-by-the-user-handoff/work/mlx-serve-prefill-pr/src/transformer.zig:42968:13: 0x102fca943 in test.hc prefill: pending write, normalized streams, native inject reduction and BF16 mix across shapes (test)
+                   try testing.expectEqual(@as(f32, 0), try attn256MaxDiff(n.raw_inject, raw, s));
+                   ^
+failed command: ./.zig-cache/o/0333f2576ec46c74cdf81c187587c009/test --cache-dir=./.zig-cache --seed=0xe85054b2 --listen=-
+
+Build Summary: 7/9 steps succeeded (1 failed); 2/3 tests passed (1 failed)
+test transitive failure
++- run test 2 pass, 1 fail (3 total)
+|  +- compile test debug native-native.26.2 success 1s MaxRSS:397M
+|     +- options cached
+|     +- translate-c cached 51ms MaxRSS:30M
+|     +- translate-c cached 53ms MaxRSS:30M
+|     +- translate-c cached 52ms MaxRSS:30M
++- run test cached
+   +- compile test debug native-native.26.2 cached 57ms MaxRSS:32M

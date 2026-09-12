@@ -1,0 +1,10 @@
+Build Summary: 9/9 steps succeeded; 3/3 tests passed
+test success
++- run test 3 pass (3 total) 1s MaxRSS:97M
+|  +- compile test debug native-native.26.2 success 1s MaxRSS:387M
+|     +- options cached
+|     +- translate-c cached 43ms MaxRSS:30M
+|     +- translate-c cached 46ms MaxRSS:30M
+|     +- translate-c cached 44ms MaxRSS:30M
++- run test cached
+   +- compile test debug native-native.26.2 cached 50ms MaxRSS:32M

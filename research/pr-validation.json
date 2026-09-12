@@ -1,25 +1,26 @@
 {
   "current": {
-    "commit": "092ce2e",
+    "commit": "1b1a4dfbfd3d5f5c2bc9c4e61963902d5089d918",
     "pr": "https://github.com/ddalcu/mlx-serve/pull/408",
     "machine": "M5 Max 128 GB",
     "macOS": "26.5",
     "build": "ReleaseFast: 7/7 steps passed",
-    "test": "zig build test: 9/9 steps, 2329 executed tests passed, 154 skipped, 0 failed; separate helper executable cached from the prior successful run",
+    "test": "zig build test: 9/9 steps, 2329 executed tests passed, 154 skipped, 0 failed; separate helper executable cached",
     "source_sha256": {
-      "src/hc_prefill.zig": "869a6a3c869358c250e810e6dc85e6439f622cfac770f9b3b6bbe68e3816768a",
+      "src/hc_prefill.zig": "7859ca304dce9ec8c843a3a63f5c00d13c8c518ad9c23754128253260ec105a7",
       "src/qsa_pair.zig": "aa43de71f9b5fd0b9f9b317137c23531eacd4b6cf5544e71ec8b445ec8f2677f",
       "src/kernels/hc_prefill_mix.metal": "2c07139bedca326bd2fe9c4f356a452567812dbce6944aac698fb7c55ddac892",
-      "src/kernels/hc_prefill_norm.metal": "73df680f3b05a96778bbad75d6b5db803c1269355a9abc20979421ebfd5d6a5e",
+      "src/kernels/hc_prefill_norm.metal": "30015a78fa8f0df968a2ed89f5da919d456215815d5c625c894e7a89ff5586cb",
       "src/kernels/qsa_pair.metal": "7771706dfe94e62bc476ef3980d9ac2d29c8c6baef1f24acc426a30e9ee03cf8",
       "src/kernels/qsa_pair_plan.metal": "434128a07464b987ef59312a4e91591c0e4320ed269537387da07a0b9ab1328f",
-      "src/transformer.zig": "3eac50277a1aaa52ec5f8515f26acfb947c58727fea1485224e02de8bfcb0260",
+      "src/transformer.zig": "f3764b0f71262f214bfab2cc6bced02eb7dae1887295cc90d24f14f246e9b95c",
       "tests/test_qsa_pair_prefill.py": "3dcc2fedeaf2d2c13f0dd2a50f24034e34ed4e63f1301ed8f25b36f72a60362b"
     },
-    "release_binary_sha256": "5d5cdc4a299b9a1f3efbd298c40f62ce3a82e1d30448a601b9e18deb1fce2130",
-    "http_evidence": "gdn_prefill/http-smoke.json; byte-identical production sources; research checkout binary",
-    "long_prompt_llmprobe_done": true,
-    "long_prompt_evidence": "long_context/manifest.json; same frozen PR binary, original 4-bit A/B and recommended mixed-4-8bit A/B/A, three coding requests per cell"
+    "release_binary_sha256": "1727d9395720c1e7013f9b041dde44b5a1e38aea6b8a5662ea8a69ae61959382",
+    "http_evidence": "followups/hc-native-http-smoke.json; corrected PR binary",
+    "hc_correction_evidence": "followups/20260912-hc-native-inject.md",
+    "long_prompt_llmprobe_done": false,
+    "long_prompt_note": "The 1879 tok/s long result belongs to previous 092ce2e. No new long run for this numerical correction."
   },
   "previous_qsa_hc": {
     "commit": "44bd600",
@@ -41,5 +42,27 @@
     "release_binary_sha256": "6b06c74efaeb1c7b2dc31843bce25b17da0d46d4a4ce08dfbd08058842d21b5d",
     "http_evidence": "hc_prefill/http-smoke.json; byte-identical production sources; original research checkout binary",
     "long_prompt_llmprobe_done": false
+  },
+  "previous_qsa_hc_gdn_092ce2e": {
+    "commit": "092ce2e",
+    "pr": "https://github.com/ddalcu/mlx-serve/pull/408",
+    "machine": "M5 Max 128 GB",
+    "macOS": "26.5",
+    "build": "ReleaseFast: 7/7 steps passed",
+    "test": "zig build test: 9/9 steps, 2329 executed tests passed, 154 skipped, 0 failed; separate helper executable cached from the prior successful run",
+    "source_sha256": {
+      "src/hc_prefill.zig": "869a6a3c869358c250e810e6dc85e6439f622cfac770f9b3b6bbe68e3816768a",
+      "src/qsa_pair.zig": "aa43de71f9b5fd0b9f9b317137c23531eacd4b6cf5544e71ec8b445ec8f2677f",
+      "src/kernels/hc_prefill_mix.metal": "2c07139bedca326bd2fe9c4f356a452567812dbce6944aac698fb7c55ddac892",
+      "src/kernels/hc_prefill_norm.metal": "73df680f3b05a96778bbad75d6b5db803c1269355a9abc20979421ebfd5d6a5e",
+      "src/kernels/qsa_pair.metal": "7771706dfe94e62bc476ef3980d9ac2d29c8c6baef1f24acc426a30e9ee03cf8",
+      "src/kernels/qsa_pair_plan.metal": "434128a07464b987ef59312a4e91591c0e4320ed269537387da07a0b9ab1328f",
+      "src/transformer.zig": "3eac50277a1aaa52ec5f8515f26acfb947c58727fea1485224e02de8bfcb0260",
+      "tests/test_qsa_pair_prefill.py": "3dcc2fedeaf2d2c13f0dd2a50f24034e34ed4e63f1301ed8f25b36f72a60362b"
+    },
+    "release_binary_sha256": "5d5cdc4a299b9a1f3efbd298c40f62ce3a82e1d30448a601b9e18deb1fce2130",
+    "http_evidence": "gdn_prefill/http-smoke.json; byte-identical production sources; research checkout binary",
+    "long_prompt_llmprobe_done": true,
+    "long_prompt_evidence": "long_context/manifest.json; same frozen PR binary, original 4-bit A/B and recommended mixed-4-8bit A/B/A, three coding requests per cell"
   }
 }

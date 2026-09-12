@@ -1,0 +1,17 @@
+{
+  "production_commit": "1b1a4dfbfd3d5f5c2bc9c4e61963902d5089d918",
+  "mlx_source": "1f8e74e3f12f31365464a6867c6579f0e9b29d85",
+  "libmlx_sha256": "c63811e0fe9afb5463f60137b6db913da0de73634cc736c8e06771a62b1db477",
+  "files": {
+    "research/followups/hc-native-http-smoke.json": "3f86a0efbf4f0ec8eb7be3405cbaae3ed6f55bfa4187bb50832a376d82333d70",
+    "research/followups/hc-native-suite.txt": "8f3d1803224bcb7c34ce0caadad77032f244cd30e94557f8e2710d5803d8902e",
+    "research/followups/hc-native-inject-probe.cpp": "1e52f2a97081bc5e404d64be9da478f9b26226ff70c2d0e8a22d840c010f94ab",
+    "research/followups/hc-native-red.txt": "b5c11d9136b93440369f1cc56956a71177e1033dd6fc40acb2cc34cfac117821",
+    "research/followups/hc-native-green.txt": "8a42ddfeff892b0ccceeec7617aabdfcf972dfb62492b469b9ef0c6a368152f2",
+    "research/followups/hc-native-inject-norm.metal": "30015a78fa8f0df968a2ed89f5da919d456215815d5c625c894e7a89ff5586cb",
+    "research/followups/hc-native-inject-4bit.jsonl": "d03e3188da4a8c36cda6558175e4d22b3a3311132c66ac85ae4ecfbb15123777",
+    "research/followups/hc-native-build.txt": "ed82bee923195bd0cb1e4245c134d5f0a9dfbbc7b73946cac4137a1cece9956a",
+    "research/followups/hc-native-inject-8bit.jsonl": "e0e71ebf4f8c3ec7b32b3b29c8417a13ac4fb576b8fa5e861fa3798be713fd06",
+    "research/followups/20260912-hc-native-inject.md": "05963e06e18280cab576705ccf6e161ecb8d8f476cd1f6a2534b849591e6bf4e"
+  }
+}
