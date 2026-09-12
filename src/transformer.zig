@@ -3333,6 +3333,12 @@ pub fn gatherQsa256(
         gqa,
         qs[2],
     );
+    if (use_nax and @import("qsa_pair.zig").enabled()) {
+        if (try @import("qsa_pair.zig").apply(s, q, k, v, scale, blocks, ratio)) |out| {
+            qsa_gather_used_nax = true;
+            return out;
+        }
+    }
     const kernel = blk: {
         if (use_nax) {
             break :blk getQsaNaxKernel() catch {
@@ -42847,6 +42853,38 @@ test "gatherQsa256 NAX: precise sparse attention and stock fallback" {
         const out = (try gatherQsa256(s, q, k, v, scale, fx.blocks, 4)) orelse return error.GatherDeclined;
         defer _ = mlx.mlx_array_free(out);
         try std.testing.expect(try attn256MaxDiff(out, ref, s) < 0.005);
+    }
+}
+
+test "qsa pair: Zig dispatch preserves outputs across batch and sequence shape changes" {
+    if (!verifyQmmNaxAvailable() or !qsaNaxOsOk()) return error.SkipZigTest;
+    const s = mlx.gpuStream();
+    var prng = std.Random.DefaultPrng.init(0x71818);
+    const rnd = prng.random();
+    for ([_][4]c_int{ .{ 1, 17, 37, 6 }, .{ 2, 65, 159, 31 }, .{ 1, 128, 257, 32 } }) |sh| {
+        const q = try attn256RandBf16(rnd, &.{ sh[0], 24, sh[1], 256 }, s);
+        defer _ = mlx.mlx_array_free(q);
+        const k = try attn256RandBf16(rnd, &.{ sh[0], 2, sh[2], 256 }, s);
+        defer _ = mlx.mlx_array_free(k);
+        const v = try attn256RandBf16(rnd, &.{ sh[0], 2, sh[2], 256 }, s);
+        defer _ = mlx.mlx_array_free(v);
+        var fx = try QsaBlockFixture.build(rnd, sh[1], sh[2], sh[3], 4);
+        defer fx.deinit();
+        var blocks = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(blocks);
+        try mlx.check(mlx.mlx_tile(&blocks, fx.blocks, &[_]c_int{ sh[0], 1, 1 }, 3, s));
+        const stock = qsaGatherProbeDispatch(s, q, k, v, 1.0 / 16.0, blocks, 4, true) orelse return error.GatherDeclined;
+        defer _ = mlx.mlx_array_free(stock);
+        const reference = if (sh[0] == 1)
+            try qsaGatherF32Reference(q, k, v, 1.0 / 16.0, blocks, 4, s)
+        else
+            try standinRef(stock);
+        defer _ = mlx.mlx_array_free(reference);
+        const paired = (try @import("qsa_pair.zig").apply(s, q, k, v, 1.0 / 16.0, blocks, 4)) orelse return error.GatherDeclined;
+        defer _ = mlx.mlx_array_free(paired);
+        const stock_error = try attn256MaxDiff(stock, reference, s);
+        const pair_error = try attn256MaxDiff(paired, reference, s);
+        try std.testing.expect(pair_error <= @max(1.5 * stock_error, 4.9e-4));
     }
 }
 
