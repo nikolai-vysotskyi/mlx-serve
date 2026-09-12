@@ -46,3 +46,11 @@ A representative overlap probe was also executed before rewriting the scheduler:
 Further work must remove arithmetic or memory traffic in the expert chain/HC, or change their data layout and reuse. Do not spend full-model runs trying to combine this QSA win with speculative overlap or cold-sample QMM gains: the measured budget is still below the target.
 
 Source attribution: paired attention adapts this repository's QSA NAX implementation and its Apple MLX fragment helpers, already covered by `NOTICE` and `MLX-LICENSE`. Planner, experiment drivers and integration glue are new research code.
+
+## Follow-up investigation
+
+The published 14.1949 ms version remains fastest among the variants examined. Simultaneous private-left/private-right processing with two compact KV tiles used 32 KiB of threadgroup memory and took 21.813 ms. Splitting D over four SIMD groups per query took 16.5743 ms; direct vector loads into NAX fragments took 16.5652 ms. Controls remained 29.47–29.71 ms. None replaces the published kernel.
+
+CPU analysis of alternative query pairing was also unpromising: mean adjacent intersection is 353.69 of 512 blocks; greedy matching inside windows of 16/64/256 increases it only to 361.49/373.48/393.79. This did not justify implementing an expensive GPU matching pass.
+
+A separate [HC write/read component](../hc_prefill/README.md) now measures ~1.57× with its own numerical evidence. It is not integrated into the server yet and is not a whole-model 1.57× result.
