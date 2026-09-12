@@ -6,14 +6,15 @@ std::string f32store(std::string src) {
   if(p==std::string::npos)throw std::runtime_error("output pointer missing");
   src.replace(p,std::string("device T* Op=out").size(),"device float* Op=out");return src;
 }
-int main() {
+int main(int argc,char**) {
   std::mt19937 rng(18471);
   auto header=read_file("src/kernels/qsa_nax_header.metal");
   auto base=mx::fast::metal_kernel("pair_oracle_base",{"q","k","v","scl","blocks"},{"out"},f32store(read_file("src/kernels/qsa_nax.metal")),header,false);
   auto candidate=mx::fast::metal_kernel("pair_oracle_new",{"q","k","v","scl","blocks","tilepos","tilemask"},{"out"},f32store(read_file("src/kernels/qsa_pair.metal")),header,false);
   auto planner=mx::fast::metal_kernel("pair_oracle_plan",{"blocks","kvlen"},{"tilepos","tilemask"},read_file("src/kernels/qsa_pair_plan.metal"),"",false);
   struct C{int B,S,KV,KB;};
-  for(auto sh:std::vector<C>{{2,17,17,512},{2,65,65599,512},{2,130,159,31},{1,8192,65536,512}}) {
+  auto shapes=argc>1?std::vector<C>{{1,8192,8192,512}}:std::vector<C>{{2,17,17,512},{2,65,65599,512},{2,130,159,31},{1,8192,65536,512}};
+  for(auto sh:shapes) {
     auto [B,S,KV,KB]=sh;int NG=(S+1)/2,NT=2*((KB+1)*4+31)/32+3;
     std::vector<int> ids(size_t(B)*S*KB,2147483647);
     for(int b=0;b<B;b++)for(int s=0;s<S;s++) {
@@ -51,7 +52,7 @@ int main() {
     double worst_new=0,worst_stock=0,worst_bf_new=0,worst_bf_stock=0;int checked=0;
     auto ob=mx::astype(mx::astype(out,mx::bfloat16),mx::float32),rb=mx::astype(mx::astype(ref,mx::bfloat16),mx::float32);mx::eval(ob,rb);
     const float* actual_b=ob.data<float>(),*stock_b=rb.data<float>();
-    for(int b=0;b<B;b++)for(int s:std::set<int>{0,1,2,S/2,S-2,S-1})for(int h:{0,11,12,23}) {
+    for(int b=0;b<B;b++)for(int s:std::set<int>{0,1,2,std::min(S-1,2047),std::min(S-1,2048),S/2,S-2,S-1})for(int h:{0,11,12,23}) {
       int p=KV-S+s,complete=(p+1)/4;std::vector<int> pos;
       for(int i=0;i<std::min(KB,complete);i++)for(int r=0;r<4;r++)pos.push_back(ids[(b*S+s)*KB+i]*4+r);
       for(int r=complete*4;r<=p;r++)pos.push_back(r);

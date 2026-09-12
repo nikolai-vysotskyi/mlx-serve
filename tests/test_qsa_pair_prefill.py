@@ -2,6 +2,7 @@
 """Run against a disposable server, MLX_SERVE_QSA_PAIR=1, cache off; check two shapes."""
 import argparse
 import json
+import re
 from pathlib import Path
 import urllib.request
 
@@ -11,6 +12,7 @@ p.add_argument('--model', default='ddalcu/Qwen3.8-Flash-Next-MLX-Serve-4bit')
 p.add_argument('--log', type=Path, required=True)
 p.add_argument('--pair', choices=('on', 'off'), required=True)
 p.add_argument('--hc', choices=('on', 'off'))
+p.add_argument('--first-chunk', action='store_true')
 args = p.parse_args()
 log_offset = args.log.stat().st_size if args.log.exists() else 0
 source = (Path(__file__).resolve().parents[1] / 'src/transformer.zig').read_text()
@@ -37,6 +39,9 @@ log = args.log.read_bytes()[log_offset:].decode('utf-8', errors='replace')
 expected = ('[qsa-pair] engaged:' if args.pair == 'on'
             else '[qsa-gather] engaged: msv_qsa_nax_precise')
 assert expected in log, f'Missing engagement: {expected}'
+if args.first_chunk:
+    assert args.pair == 'on'
+    assert re.search(r'\[qsa-pair\] engaged: S=8192 kv=8192 ', log), 'First chunk used the old mask arm'
 if args.pair == 'off':
     assert '[qsa-pair] engaged:' not in log
 if args.hc == 'on':

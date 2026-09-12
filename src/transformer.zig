@@ -17939,7 +17939,14 @@ pub const Transformer = struct {
         // the selection too: `qsaVerifyGatherAttn` reads the UNION of the
         // rows' selections instead of the whole cache. Its own kv floor is
         // higher than the prefill/decode one — the union is fixed-size.
-        const want_blocks = batch == 1 and kv > qsaGatherMinKv() and qsaGatherEnabled() and
+        const pair = @import("qsa_pair.zig");
+        const pair_early = pair.enabled() and pair.supports(batch, seq_len, kv, ratio, block_topk) and
+            qsaNaxEnabled() and cfg.num_key_value_heads > 0 and
+            qsaNaxEligible(mlx.mlx_array_dtype(qk), .bfloat16, .bfloat16, @intCast(cfg.head_dim), @intCast(cfg.num_attention_heads / cfg.num_key_value_heads), seq_len) and
+            qsa_gather_min_kv_override == null and std.c.getenv("MLX_SERVE_QSA_GATHER_MIN_KV") == null;
+        // The old unshared gather crossover needlessly excludes the first paired-prefill chunk.
+        const gather_floor = if (pair_early) @min(qsaGatherMinKv(), budget + ratio - 1) else qsaGatherMinKv();
+        const want_blocks = batch == 1 and kv > gather_floor and qsaGatherEnabled() and
             (seq_len >= FUSED256_MIN_Q_LEN or (seq_len == 1 and qsaDecodeGatherEnabled()) or
                 (seq_len >= 2 and seq_len < FUSED256_MIN_Q_LEN and qsaVerifyGatherEnabled() and kv > qsaVerifyGatherMinKv()));
         if (want_blocks) {

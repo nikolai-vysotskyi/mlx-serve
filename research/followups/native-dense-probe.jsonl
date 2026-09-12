@@ -1,0 +1,9 @@
+{"shape":"gdn_in","M":8192,"K":2560,"N":16384,"mode":1,"ms":11.1998,"max_diff":0,"rmse":0}
+{"shape":"gdn_in","M":8192,"K":2560,"N":16384,"mode":5,"ms":11.1997,"max_diff":0,"rmse":0}
+{"shape":"gdn_in","M":8192,"K":2560,"N":16384,"mode":1,"ms":11.1747,"max_diff":0,"rmse":0}
+{"shape":"gdn_out","M":8192,"K":6144,"N":2560,"mode":1,"ms":4.44817,"max_diff":0,"rmse":0}
+{"shape":"gdn_out","M":8192,"K":6144,"N":2560,"mode":5,"ms":4.75946,"max_diff":0,"rmse":0}
+{"shape":"gdn_out","M":8192,"K":6144,"N":2560,"mode":1,"ms":4.47325,"max_diff":0,"rmse":0}
+{"shape":"attn_q","M":8192,"K":2560,"N":12288,"mode":1,"ms":8.48188,"max_diff":0,"rmse":0}
+{"shape":"attn_q","M":8192,"K":2560,"N":12288,"mode":5,"ms":8.46704,"max_diff":0,"rmse":0}
+{"shape":"attn_q","M":8192,"K":2560,"N":12288,"mode":1,"ms":8.46946,"max_diff":0,"rmse":0}

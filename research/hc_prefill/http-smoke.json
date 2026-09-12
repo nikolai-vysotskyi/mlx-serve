@@ -60,6 +60,94 @@
         "MAGNOLIA-7731",
         "MAGNOLIA-7731"
       ]
+    },
+    "on_first_chunk_env": {
+      "flags": {
+        "MLX_SERVE_QSA_PAIR": 1,
+        "MLX_SERVE_HC_PREFILL": 1,
+        "MLX_SERVE_QSA_GATHER_MIN_KV": 2048
+      },
+      "engagement": [
+        "[hc-prefill] engaged: S=8192 B=1 pending=false",
+        "[qsa-pair] engaged: S=8192 kv=8192 KB=512 B=1"
+      ],
+      "requests": [
+        {
+          "tokens": 13515,
+          "generated": 10,
+          "prefill_tok_s": 2257.3
+        },
+        {
+          "tokens": 15715,
+          "generated": 10,
+          "prefill_tok_s": 2383.4
+        }
+      ],
+      "answers": [
+        "MAGNOLIA-7731",
+        "MAGNOLIA-7731"
+      ]
+    },
+    "on_first_chunk_dispatch": {
+      "flags": {
+        "MLX_SERVE_QSA_PAIR": 1,
+        "MLX_SERVE_HC_PREFILL": 1
+      },
+      "engagement": [
+        "[hc-prefill] engaged: S=8192 B=1 pending=false",
+        "[qsa-pair] engaged: S=8192 kv=8192 KB=512 B=1"
+      ],
+      "requests": [
+        {
+          "tokens": 13515,
+          "generated": 10,
+          "prefill_tok_s": 2251.1
+        },
+        {
+          "tokens": 15715,
+          "generated": 10,
+          "prefill_tok_s": 2397.0
+        }
+      ],
+      "answers": [
+        "MAGNOLIA-7731",
+        "MAGNOLIA-7731"
+      ]
+    },
+    "off_final_control": {
+      "flags": {
+        "MLX_SERVE_QSA_PAIR": 0,
+        "MLX_SERVE_HC_PREFILL": 0
+      },
+      "engagement": [
+        "[qsa-gather] engaged: msv_qsa_nax_precise S=5322 kv=13514 blocks=512 bk=32 tgmem=20992 (MLX_SERVE_QSA_NAX=0 restores the stock gather)"
+      ],
+      "requests": [
+        {
+          "tokens": 13515,
+          "generated": 10,
+          "prefill_tok_s": 1835.2
+        },
+        {
+          "tokens": 15715,
+          "generated": 10,
+          "prefill_tok_s": 1989.0
+        }
+      ],
+      "answers": [
+        "MAGNOLIA-7731",
+        "MAGNOLIA-7731"
+      ]
     }
-  }
+  },
+  "final_warm_comparison": {
+    "tokens": 15715,
+    "on": 2397.0,
+    "off": 1989.0,
+    "ratio": 1.205128205128205,
+    "method": "one warmed HTTP request per arm; short smoke, not llmprobe",
+    "arm_order": "on_first_chunk_dispatch then off_final_control",
+    "same_binary": true
+  },
+  "macOS": "26.5"
 }

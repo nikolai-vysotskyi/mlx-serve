@@ -10,6 +10,11 @@ pub fn enabled() bool {
     return std.mem.eql(u8, std.mem.sliceTo(raw, 0), "1");
 }
 
+pub fn supports(batch: c_int, seq: c_int, kv: c_int, ratio: c_int, kb: c_int) bool {
+    return ratio == 4 and kb > 0 and kb <= 512 and seq >= 16 and seq <= 8192 and
+        batch >= 1 and batch <= 2 and kv >= seq and kv <= 131072;
+}
+
 fn getKernels() ![2]mlx.mlx_fast_metal_kernel {
     if (kernels) |ks| return ks;
     const plan_in = [_][*:0]const u8{ "blocks", "kvlen" };
@@ -38,7 +43,7 @@ pub fn apply(s: mlx.mlx_stream, q: mlx.mlx_array, k: mlx.mlx_array, v: mlx.mlx_a
     const qs = mlx.getShape(q);
     const ks = mlx.getShape(k);
     const bs = mlx.getShape(blocks);
-    if (ratio != 4 or bs[2] > 512 or qs[2] > 8192 or qs[0] > 2 or ks[2] > 131072) return null;
+    if (!supports(qs[0], qs[2], ks[2], ratio, bs[2])) return null;
     const ng = @divTrunc(qs[2] + 1, 2);
     const nt = 2 * @divTrunc((bs[2] + 1) * ratio + 31, 32) + 3;
     const pair = try getKernels();
