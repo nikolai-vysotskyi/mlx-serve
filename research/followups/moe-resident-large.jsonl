@@ -1,0 +1,3 @@
+{"fused":0,"E":512,"rows":81920,"max_diff":0,"rmse":0,"finite":1,"median_ms":25.0795,"gpu_schedule_included":true}
+{"fused":1,"E":512,"rows":81920,"max_diff":0,"rmse":0,"finite":1,"median_ms":63.053,"gpu_schedule_included":true}
+{"fused":0,"E":512,"rows":81920,"max_diff":0,"rmse":0,"finite":1,"median_ms":24.5452,"gpu_schedule_included":true}

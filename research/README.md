@@ -120,6 +120,8 @@ For any future long-prompt comparison, freeze prompt bytes/token counts, model, 
 
 ## Do not repeat these rejected directions blindly
 
+The latest [large-lever investigation](followups/20260912-large-levers.md) adds a complete resident gate/up/down prototype (bit-exact on the fixtures, 63.05 ms versus 24.55–25.08 ms) and QSA score/select budget measurements (stock 9.00–9.47 ms at S8192/KV65536; lower-register alternatives were slower). No new model throughput is claimed. It also records the reviewer's clarification that the 2083 tok/s screenshot used a 16k prompt.
+
 `followups/README.md` and the component folders record the evidence. Larger generic NAX tiles, dense expert weight expansion, a physically transposed dense layout, direct native MPP GEMM, a BF16 INT4 codebook, Q reloads, packed K/V layouts, and several QSA role/pipeline arrangements did not beat the best relevant path by enough. An addressable union made one QSA role prototype extremely slow; explicit packed registers reduced 72.85 -> 19.04 ms, but the working paired kernel is still 14.19 ms. Pipelining those roles gave 19.69 ms. Do not ship a prototype just because it beats the old 29.5 ms baseline.
 
 Native BF16 × packed UINT4 factorization is in `native_int4/`. It changes per-weight BF16 rounding and is slower than stock even after unrolling. Treat it as a rejected investigation, not lossless repacking or an accepted quality-preserving optimization.
