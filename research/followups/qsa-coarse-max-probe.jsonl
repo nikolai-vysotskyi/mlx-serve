@@ -1,0 +1,5 @@
+{"coarse_max":0,"G":0,"S":4096,"KV":36864,"max_tiles":0,"tiles":0,"active_tiles":0,"ms":29.6035,"max_diff":0,"rmse":0,"plan_included":true}
+{"coarse_max":0,"G":2,"S":4096,"KV":36864,"max_tiles":133,"tiles":174432,"active_tiles":266113,"ms":13.811,"max_diff":0.000244141,"rmse":1.16102e-06,"plan_included":true}
+{"coarse_max":1,"G":2,"S":4096,"KV":36864,"max_tiles":133,"tiles":174432,"active_tiles":266113,"ms":16.1306,"max_diff":0.000244141,"rmse":1.5375e-06,"plan_included":true}
+{"coarse_max":0,"G":2,"S":4096,"KV":36864,"max_tiles":133,"tiles":174432,"active_tiles":266113,"ms":13.7857,"max_diff":0.000244141,"rmse":1.16102e-06,"plan_included":true}
+{"coarse_max":0,"G":0,"S":4096,"KV":36864,"max_tiles":0,"tiles":0,"active_tiles":0,"ms":29.6089,"max_diff":0,"rmse":0,"plan_included":true}

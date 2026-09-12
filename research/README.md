@@ -113,3 +113,5 @@ A cloud session with GitHub can fetch this branch, inspect upstream changes, der
 Do not assume ordinary hosted macOS CI is an M5 Max with 128 GB or that it holds this model. Use only provided runner access. If no such runner is available, clearly mark the hardware check pending and continue other useful work. Do not claim completion of the throughput objective.
 
 Existing discussion: https://github.com/ddalcu/mlx-serve/issues/366 . The paired kernel and HC component results, code links and short combined results are recorded there. Prefer updating this issue to creating duplicates.
+
+Latest measured update: [2509.4 tok/s short HTTP and GDN PR addition](https://github.com/ddalcu/mlx-serve/issues/366#issuecomment-5643393131). Subsequent mixed-PV, coarse-softmax and cached-dense-HC probes are recorded in `followups/README.md`; none improved the accepted implementation with demonstrated numerical validity.
