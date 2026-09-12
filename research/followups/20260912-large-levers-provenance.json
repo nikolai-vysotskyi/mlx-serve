@@ -19,10 +19,10 @@
     "research/followups/qsa-score-budget-large.jsonl": "c8cd031bdaf672bba3e139a5ba4af1004d8868bdcf40e615451f7edfe25cad31",
     "research/followups/qsa-score-budget-probe.cpp": "d9330d578ad170d9e328d96fd92e21372aa972d4de9b7d60876be7988228889a",
     "research/followups/qsa-score-budget-small.jsonl": "6fd079d779459ea62c2bd7aa5f07c2714f0b7ca1402a59c300e02303a79286dc",
-    "research/followups/qsa-score-header.metal": "bb5a769ab56398e8ab5ef0fc9155c0fa790963fb35dcdd35b53c6e231340d8a0",
-    "research/followups/qsa-score-reload.metal": "c9a7f95a3913c3a0a3e9e31bd389e568696c73328b8b524242df10e3a1f3c040",
-    "research/followups/qsa-score-stock.metal": "c557d6d16f986157b57dd30a763a69439ca019fbf1a40fe9db908795e8e13947",
-    "research/followups/qsa-select-header.metal": "2f18ea65969726841abdd9a8a1bb0509460564006b6c5bf52d1611349629f68a",
+    "research/followups/qsa-score-header.metal": "58fb2612e530fa767f44bcc125342eb3fa6f3db4eb2111d9bd6e03399232ad8f",
+    "research/followups/qsa-score-reload.metal": "b393eb1926049a91acef025916a3faac6de355c447667b427877f98c176fff1a",
+    "research/followups/qsa-score-stock.metal": "f4a4610117ad09a58818aa8b3dba063ff07095301a7c738a7ee7058c38bea3cb",
+    "research/followups/qsa-select-header.metal": "f73bba01b9436970648308cd09d254e99e835ee42751ff052e61f0ee99b19eb1",
     "research/followups/qsa-select-stock.metal": "8ea33bff090607276cd9ee7dbc4f2c6f908c48511348b573b056dd072ab84196"
   },
   "runtime_sha256": {
@@ -33,5 +33,21 @@
   "whole_model_run": false,
   "whole_model_speedup": null,
   "adopted_in_production": false,
-  "gpu_lock_used": true
+  "gpu_lock_used": true,
+  "tested_source_sha256": {
+    "research/followups/moe-resident-large.jsonl": "16fada04a0a321a6077b98be2652891c45a0f918b6da0ba0a3b1a012d7780c32",
+    "research/followups/moe-resident-probe.cpp": "1dfe306fbe9f62ba15a873e36c5537864c25d70f5bfc75b110898a74f57cf5ce",
+    "research/followups/moe-resident-schedule.metal": "6847d883eb9d8657d088ea548af2ef4e7a007ae59984614dcd1603ba2819eb69",
+    "research/followups/moe-resident-small.jsonl": "de8079af4266d687a8edf57532b2eb47015e644557d9247dbcab20f3b1836586",
+    "research/followups/moe-resident.metal": "e15f1b96d3d9223ae160ffecd79a760da9d12f4aac17089eadb01f640548f291",
+    "research/followups/qsa-score-budget-large.jsonl": "c8cd031bdaf672bba3e139a5ba4af1004d8868bdcf40e615451f7edfe25cad31",
+    "research/followups/qsa-score-budget-probe.cpp": "d9330d578ad170d9e328d96fd92e21372aa972d4de9b7d60876be7988228889a",
+    "research/followups/qsa-score-budget-small.jsonl": "6fd079d779459ea62c2bd7aa5f07c2714f0b7ca1402a59c300e02303a79286dc",
+    "research/followups/qsa-score-header.metal": "bb5a769ab56398e8ab5ef0fc9155c0fa790963fb35dcdd35b53c6e231340d8a0",
+    "research/followups/qsa-score-reload.metal": "c9a7f95a3913c3a0a3e9e31bd389e568696c73328b8b524242df10e3a1f3c040",
+    "research/followups/qsa-score-stock.metal": "c557d6d16f986157b57dd30a763a69439ca019fbf1a40fe9db908795e8e13947",
+    "research/followups/qsa-select-header.metal": "2f18ea65969726841abdd9a8a1bb0509460564006b6c5bf52d1611349629f68a",
+    "research/followups/qsa-select-stock.metal": "8ea33bff090607276cd9ee7dbc4f2c6f908c48511348b573b056dd072ab84196"
+  },
+  "post_measurement_change": "Only redundant trailing blank lines removed from four extracted Metal sources; tested-source hashes retained."
 }

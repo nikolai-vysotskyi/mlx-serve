@@ -7,4 +7,3 @@ inline uint msv_qsa_ord(float v) {
   uint u = as_type<uint>(v);
   return (u & 0x80000000u) ? (~u) : (u | 0x80000000u);
 }
-
