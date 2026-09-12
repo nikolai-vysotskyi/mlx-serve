@@ -7,8 +7,11 @@ var kernel: ?mlx.mlx_fast_metal_kernel = null;
 var announced = false;
 
 pub fn eligible(table: *const qwen.NgramTable, n: usize, deferred: bool) bool {
-    const raw = std.c.getenv("MLX_SERVE_PLE_PACKED") orelse return false;
-    return raw[0] == '1' and !mlx.noGpuBackend() and !deferred and n >= 64 and n <= 8192 and supported(table);
+    const on = @import("prefill_experiment.zig").ple() orelse blk: {
+        const raw = std.c.getenv("MLX_SERVE_PLE_PACKED") orelse break :blk false;
+        break :blk raw[0] == '1';
+    };
+    return on and !mlx.noGpuBackend() and !deferred and n >= 64 and n <= 8192 and supported(table);
 }
 fn supported(t: *const qwen.NgramTable) bool {
     return t.rows <= std.math.maxInt(u32) and t.bits == 4 and t.group_size == 32 and t.dim == 160 and t.wcols == 20 and t.scols == 5;
@@ -155,6 +158,7 @@ pub const Ahead = struct {
     }
 
     pub fn enabled() bool {
+        if (@import("prefill_experiment.zig").ple()) |v| return v;
         const v = std.c.getenv("MLX_SERVE_PLE_AHEAD") orelse return false;
         return v[0] == '1';
     }

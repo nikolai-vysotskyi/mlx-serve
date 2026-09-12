@@ -5,6 +5,16 @@ const log = @import("log.zig");
 var kernels: [4]?mlx.mlx_fast_metal_kernel = @splat(null);
 var announced = false;
 var captured_routes: u32 = 0;
+var live_calls: u32 = 0;
+
+pub fn liveProbe(tokens: c_int) ?u32 {
+    if (tokens < 2048 or tokens > 8192 or live_calls >= 4) return null;
+    const raw = std.c.getenv("QWEN4_MOE_LIVE_AB") orelse return null;
+    if (raw[0] != '1') return null;
+    const call = live_calls;
+    live_calls += 1;
+    return if (call == 0 or call == 3) call else null;
+}
 
 /// Diagnostic only: save four real wide-prefill routing fixtures, then stop.
 /// Saving evaluates the router, so these runs must not be used for throughput.
@@ -23,6 +33,7 @@ pub fn captureRoutes(a: std.mem.Allocator, indices: mlx.mlx_array, tokens: c_int
     captured_routes += 1;
 }
 pub fn enabled() bool {
+    if (@import("prefill_experiment.zig").group()) |v| return v and !mlx.noGpuBackend();
     const raw = std.c.getenv("MLX_SERVE_MOE_PREFILL_GROUP") orelse return false;
     return raw[0] == '1' and !mlx.noGpuBackend();
 }

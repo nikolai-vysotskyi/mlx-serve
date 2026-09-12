@@ -1,5 +1,7 @@
 # Follow-up while PR #408's current-head ladder runs
 
+Update: [live MoE parity and measured thermal/frequency drift](20260913-live-moe-and-thermal-drift.md) supersede the stationary-control assumption below. Actual-weight replay is faster; the full-model effect is still not established.
+
 No new model speedup is asserted here. Target for this follow-up is 2400 tok/s at 65K, with the mixed pack and quality preserved.
 
 1. **Measure normal forward scheduling.** `QWEN4_PREFILL_CADENCE_TIMING=1` in the research branch records host intervals and the existing `mlx_eval` intervals across the four-layer cadence. It introduces no extra GPU synchronization. These are host-side intervals, not GPU kernel timestamps; explicit evaluation inside an operation would be charged to the host interval. It excludes final mixer/head work. Only a substantial host interval would justify replacing the blocking cadence with a bounded, two-group producer/consumer scheme. Merely adding the old async ladder was already negative on another model.

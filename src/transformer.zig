@@ -24035,6 +24035,39 @@ pub const Transformer = struct {
     /// router_x: input for routing (raw hidden states).
     /// expert_x: input for expert computation (possibly normalized).
     fn moeMLP2(self: *Transformer, router_x: mlx.mlx_array, expert_x_in: mlx.mlx_array, mw: *const MoeMlpWeights) !mlx.mlx_array {
+        const mg = @import("moe_prefill.zig");
+        if (if (self.config.isQwen4()) mg.liveProbe(mlx.getShape(expert_x_in)[1]) else null) |call| {
+            // Drain preceding work before replaying both paths on identical live inputs.
+            try mlx.check(mlx.mlx_array_eval(router_x));
+            try mlx.check(mlx.mlx_array_eval(expert_x_in));
+            const ref = try self.moeMLP2Impl(router_x, expert_x_in, mw, false);
+            errdefer _ = mlx.mlx_array_free(ref);
+            try mlx.check(mlx.mlx_array_eval(ref));
+            const warm = try self.moeMLP2Impl(router_x, expert_x_in, mw, true);
+            defer _ = mlx.mlx_array_free(warm);
+            try mlx.check(mlx.mlx_array_eval(warm));
+            for ([_]bool{ false, true, true, false }) |grouped| {
+                var timer = ProfClock.init();
+                const got = try self.moeMLP2Impl(router_x, expert_x_in, mw, grouped);
+                defer _ = mlx.mlx_array_free(got);
+                const host_ns = timer.lap();
+                try mlx.check(mlx.mlx_array_eval(got));
+                const eval_ns = timer.lap();
+                if (mlx.mlx_array_dtype(ref) != .bfloat16 or mlx.mlx_array_dtype(got) != .bfloat16) return error.LiveMoeProbeDtype;
+                const n = mlx.mlx_array_size(ref);
+                const expected = mlx.mlx_array_data_bfloat16(ref).?[0..n];
+                const actual = mlx.mlx_array_data_bfloat16(got).?[0..n];
+                var different: usize = 0;
+                for (expected, actual) |a, b| different += @intFromBool(a != b);
+                log.info("[moe-live-ab] call={d} S={d} grouped={} host_ms={d:.3} eval_ms={d:.3} different={d}/{d} actual_weights_inputs=true sync_added=true\n", .{ call, mlx.getShape(expert_x_in)[1], grouped, @as(f64, @floatFromInt(host_ns)) / 1e6, @as(f64, @floatFromInt(eval_ns)) / 1e6, different, n });
+                if (different != 0) return error.LiveMoeProbeParity;
+            }
+            return ref;
+        }
+        return self.moeMLP2Impl(router_x, expert_x_in, mw, null);
+    }
+
+    fn moeMLP2Impl(self: *Transformer, router_x: mlx.mlx_array, expert_x_in: mlx.mlx_array, mw: *const MoeMlpWeights, group_override: ?bool) !mlx.mlx_array {
         const cfg = &self.config;
         // DIAGNOSTIC (MLX_SERVE_DISPATCH_PROBE=N): inject N extra small
         // elementwise kernels per MoE layer and read the slope. Multiplying by
@@ -24231,7 +24264,7 @@ pub const Transformer = struct {
 
             const mg = @import("moe_prefill.zig");
             if (cfg.isQwen4() and B == 1) try mg.captureRoutes(self.allocator, flat_inds, S);
-            const grouped = if (mg.enabled() and cfg.isQwen4() and B == 1 and S >= 2048 and S <= 8192 and D == 2560 and K == 10 and cfg.num_experts == 512 and !has_expert_bias and mlx.mlx_array_dtype(expert_x) == .bfloat16 and mlx.mlx_array_dtype(norm_scores) == .bfloat16 and gate_qp.bits == 4 and up_qp.bits == 4 and down_qp.bits == 4 and gate_qp.mode == .affine and up_qp.mode == .affine and down_qp.mode == .affine)
+            const grouped = if ((group_override orelse mg.enabled()) and cfg.isQwen4() and B == 1 and S >= 2048 and S <= 8192 and D == 2560 and K == 10 and cfg.num_experts == 512 and !has_expert_bias and mlx.mlx_array_dtype(expert_x) == .bfloat16 and mlx.mlx_array_dtype(norm_scores) == .bfloat16 and gate_qp.bits == 4 and up_qp.bits == 4 and down_qp.bits == 4 and gate_qp.mode == .affine and up_qp.mode == .affine and down_qp.mode == .affine)
                 try mg.group(self.s, flat_inds)
             else
                 null;

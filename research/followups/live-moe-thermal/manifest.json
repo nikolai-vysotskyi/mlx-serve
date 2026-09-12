@@ -1,0 +1,16 @@
+{
+  "source_parent": "bd70e05",
+  "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+  "source_sha256": {
+    "src/generate.zig": "9c500954a57cb327601b9d8a1125c9c4f68fbef223a7d56e880b864871aa7809",
+    "src/transformer.zig": "674f00ea0665f9d0231f90b10a13548cc863199b07867e000e3213e68b8babe8",
+    "src/moe_prefill.zig": "fc9fa7ad61e0e6e8b329090151c6519594a9388bf816f65915e3651c7356b49a",
+    "src/ple_packed.zig": "6ed089fb8b8069f83c921508ec961d7a64214609efb9a9f208abf3c0be8154f7",
+    "src/prefill_experiment.zig": "c63762d56917797a21e46d886972ec2339f258587b9f06d36c9c80e85a43e7fa"
+  },
+  "macmon_version": "0.8.2",
+  "macmon_archive_sha256": "588d5bde79885ba36f693e5150911c10c3ad208a2e418a3f2aa827ac84a2d973",
+  "macmon_binary_sha256": "8defa263675d5dce206557634cbad15f40934b0efe38eb85e6244ca51226aa66",
+  "new_full_test_suite_run": false,
+  "new_long_model_speed_claim": false
+}

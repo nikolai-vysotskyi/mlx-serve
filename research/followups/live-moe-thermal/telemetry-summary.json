@@ -1,0 +1,140 @@
+[
+  {
+    "request": 0,
+    "arm": 0,
+    "tokens": 13515,
+    "prefill_tps": 2153.7,
+    "decode_tps": 48.0,
+    "samples": 5,
+    "gpu_mhz_mean": 1618.6,
+    "gpu_watts_mean": 81.82776489257813,
+    "gpu_celsius_last": 77.46949768066406,
+    "fans_last": [
+      {
+        "max_rpm": 5349,
+        "name": "fan0",
+        "rpm": 1343
+      },
+      {
+        "max_rpm": 5777,
+        "name": "fan1",
+        "rpm": 1463
+      }
+    ]
+  },
+  {
+    "request": 1,
+    "arm": 3,
+    "tokens": 13515,
+    "prefill_tps": 2206.2,
+    "decode_tps": 48.0,
+    "samples": 5,
+    "gpu_mhz_mean": 1506,
+    "gpu_watts_mean": 67.38767700195312,
+    "gpu_celsius_last": 85.01637268066406,
+    "fans_last": [
+      {
+        "max_rpm": 5349,
+        "name": "fan0",
+        "rpm": 1352
+      },
+      {
+        "max_rpm": 5777,
+        "name": "fan1",
+        "rpm": 1449
+      }
+    ]
+  },
+  {
+    "request": 2,
+    "arm": 0,
+    "tokens": 13515,
+    "prefill_tps": 2098.8,
+    "decode_tps": 47.7,
+    "samples": 6,
+    "gpu_mhz_mean": 1518.1666666666667,
+    "gpu_watts_mean": 63.663139979044594,
+    "gpu_celsius_last": 90.91201782226562,
+    "fans_last": [
+      {
+        "max_rpm": 5349,
+        "name": "fan0",
+        "rpm": 1342
+      },
+      {
+        "max_rpm": 5777,
+        "name": "fan1",
+        "rpm": 1465
+      }
+    ]
+  },
+  {
+    "request": 3,
+    "arm": 3,
+    "tokens": 13515,
+    "prefill_tps": 2145.2,
+    "decode_tps": 48.1,
+    "samples": 6,
+    "gpu_mhz_mean": 1439.6666666666667,
+    "gpu_watts_mean": 60.66668510437012,
+    "gpu_celsius_last": 95.95145416259766,
+    "fans_last": [
+      {
+        "max_rpm": 5349,
+        "name": "fan0",
+        "rpm": 1588
+      },
+      {
+        "max_rpm": 5777,
+        "name": "fan1",
+        "rpm": 1717
+      }
+    ]
+  },
+  {
+    "request": 4,
+    "arm": 3,
+    "tokens": 13515,
+    "prefill_tps": 2035.5,
+    "decode_tps": 47.9,
+    "samples": 7,
+    "gpu_mhz_mean": 1361.4285714285713,
+    "gpu_watts_mean": 51.12352698189871,
+    "gpu_celsius_last": 97.03590393066406,
+    "fans_last": [
+      {
+        "max_rpm": 5349,
+        "name": "fan0",
+        "rpm": 1910
+      },
+      {
+        "max_rpm": 5777,
+        "name": "fan1",
+        "rpm": 2074
+      }
+    ]
+  },
+  {
+    "request": 5,
+    "arm": 0,
+    "tokens": 13515,
+    "prefill_tps": 1886.9,
+    "decode_tps": 47.3,
+    "samples": 7,
+    "gpu_mhz_mean": 1332.5714285714287,
+    "gpu_watts_mean": 47.23212269374302,
+    "gpu_celsius_last": 97.02790069580078,
+    "fans_last": [
+      {
+        "max_rpm": 5349,
+        "name": "fan0",
+        "rpm": 2300
+      },
+      {
+        "max_rpm": 5777,
+        "name": "fan1",
+        "rpm": 2494
+      }
+    ]
+  }
+]

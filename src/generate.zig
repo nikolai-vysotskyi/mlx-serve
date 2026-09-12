@@ -2347,6 +2347,7 @@ pub const Generator = struct {
             // Fixed-boundary text prefill only. The worker receives cloned
             // row metadata and a read-only table, never request cache state.
             // Defer joins on success, cancellation and every error path.
+            if (xfm.config.isQwen4()) @import("prefill_experiment.zig").begin(prompt_ids.len);
             ctx.ple_ahead = ahead: {
                 if (!@import("ple_packed.zig").Ahead.enabled() or width_is_adaptive or has_vision or mtp_active or dflash_active or xfm.compiled_forward != null) break :ahead null;
                 var ends: std.ArrayList(usize) = .empty;
