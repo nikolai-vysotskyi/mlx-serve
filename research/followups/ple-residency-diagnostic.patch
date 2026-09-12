@@ -1,0 +1,326 @@
+diff --git a/build.zig b/build.zig
+index 70edef0..66d7ac9 100644
+--- a/build.zig
++++ b/build.zig
+@@ -626,6 +626,10 @@ fn addLlamaLib(b: *std.Build, module: *std.Build.Module) void {
+ /// app/build.sh rewrite to @executable_path and re-sign for bundles.
+ /// Guard test: tests/test_mlx_staged_nax.sh.
+ fn addMlxLib(b: *std.Build, module: *std.Build.Module) void {
++    module.addIncludePath(b.path("lib/mlx-src"));
++    module.linkSystemLibrary("mlx", .{ .use_pkg_config = .no });
++    module.addCSourceFile(.{ .file = b.path("src/ple_gpu_bridge.cpp"), .flags = &.{ "-std=c++20", "-O3" } });
++    module.addCSourceFile(.{ .file = b.path("src/ple_gpu_direct.mm"), .flags = &.{ "-std=c++20", "-O3", "-fobjc-arc" } });
+     module.addIncludePath(b.path("lib/mlx/include"));
+     module.addLibraryPath(b.path("lib/mlx/lib"));
+     // use_pkg_config = .no: a leftover Homebrew mlx-c must never hijack this
+diff --git a/src/qwen4_exp.zig b/src/qwen4_exp.zig
+index ca3bf75..5028b6b 100644
+--- a/src/qwen4_exp.zig
++++ b/src/qwen4_exp.zig
+@@ -11,6 +11,11 @@
+ const std = @import("std");
+ const log = @import("log.zig");
+ 
++extern "c" fn msv_ple_gpu_create(fd: c_int, bytes: usize, params: [*]const u64, source: [*:0]const u8, map: [*]const u8) ?*anyopaque;
++extern "c" fn msv_ple_gpu_diagnostic(ctx: *anyopaque, n: usize) c_int;
++extern "c" fn msv_ple_gpu_destroy(ctx: ?*anyopaque) void;
++extern "c" fn msv_ple_gpu_gather(ctx: *anyopaque, rows: [*]const i64, n: usize, out: [*]u16) c_int;
++
+ const MASK64: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+ const SPLITMIX_GAMMA: u64 = 0x9E3779B97F4A7C15;
+ const SPLITMIX_M1: u64 = 0xBF58476D1CE4E5B9;
+@@ -189,6 +194,8 @@ pub const NgramTable = struct {
+     /// serialize on the VM map lock; preads run in parallel).
+     fd: std.c.fd_t = -1,
+     pool: ?*PrefetchPool = null,
++    gpu: ?*anyopaque = null,
++    gpu_announced: bool = false,
+     /// Boot-time page-cache warm: the weights load evicts this file, and the
+     /// first long prompt then faults 48 rows/token from SSD (38k: 174 s vs
+     /// 55 s warm). preads through the kept fd, never the mapping.
+@@ -338,6 +345,8 @@ pub const NgramTable = struct {
+         }
+         live_warm_bytes.store(0, .release);
+         live_warm_total.store(0, .release);
++        if (self.gpu) |ctx| msv_ple_gpu_destroy(ctx);
++        self.gpu = null;
+         if (self.pool) |p| p.destroy();
+         self.pool = null;
+         if (self.fd >= 0) _ = std.c.close(self.fd);
+@@ -352,6 +361,7 @@ pub const NgramTable = struct {
+     /// table sits at its final address (the thread holds `self`). Off via
+     /// MLX_SERVE_NGRAM_WARM=0.
+     pub fn startWarm(self: *NgramTable) void {
++        _ = self.startGpu(); // Keep native warming for CPU decode and diagnostic fallback.
+         if (self.fd < 0 or self.warm_thread != null) return;
+         // The off arm says so: a cold first request faults rows off the SSD (38k prompt: 174 s vs 55 s).
+         if (!warmEnabled()) {
+@@ -366,6 +376,58 @@ pub const NgramTable = struct {
+         self.warm_thread = std.Thread.spawn(.{}, warmMain, .{self}) catch null;
+     }
+ 
++    fn startGpu(self: *NgramTable) bool {
++        const raw = std.c.getenv("MLX_SERVE_PLE_GPU") orelse return false;
++        if (raw[0] != '1' or self.gpu != null or self.fd < 0 or self.bits != 4 or self.dim != 160 or self.group_size != 32) return false;
++        const params = [_]u64{ self.w_off, self.s_off, self.b_off, self.wcols, self.scols, self.dim, self.group_size };
++        log.info("[ple-gpu] preparing zero-copy table: {d} bytes (startup residency check)\n", .{self.map.len});
++        const ctx = msv_ple_gpu_create(self.fd, self.map.len, &params, @embedFile("kernels/ple_gpu.metal"), self.map.ptr) orelse return false;
++        const ids = [_]i64{ 0, @intCast(self.rows / 2), @intCast(self.rows - 1) };
++        var got: [3 * 160]u16 = undefined;
++        if (msv_ple_gpu_gather(ctx, &ids, ids.len, &got) != 0) {
++            msv_ple_gpu_destroy(ctx);
++            return false;
++        }
++        var row_values: [160]f32 = undefined;
++        for (ids, 0..) |id, r| {
++            self.row(@intCast(id), &row_values);
++            for (row_values, 0..) |value, c| {
++                const bits: u32 = @bitCast(value);
++                const expected: u16 = @intCast((bits +% 0x7fff +% ((bits >> 16) & 1)) >> 16);
++                if (got[r * 160 + c] != expected) {
++                    log.warn("[ple-gpu] startup parity failed; CPU fallback\n", .{});
++                    msv_ple_gpu_destroy(ctx);
++                    return false;
++                }
++            }
++        }
++        self.gpu = ctx;
++        log.info("[ple-gpu] ready: zero-copy table, startup parity passed\n", .{});
++        return true;
++    }
++
++    pub fn gatherGpuBf16(self: *NgramTable, rows: []const i64, out: []u16) bool {
++        const ctx = self.gpu orelse return false;
++        if (rows.len < 1024 or rows.len > 131072 * 16 or out.len != rows.len * 160) return false;
++        const mode = msv_ple_gpu_diagnostic(ctx, rows.len);
++        if (mode == 0) return false;
++        if (mode == -1) {
++            msv_ple_gpu_destroy(ctx);
++            self.gpu = null;
++            return false;
++        }
++        if (msv_ple_gpu_gather(ctx, rows.ptr, rows.len, out.ptr) != 0) {
++            msv_ple_gpu_destroy(ctx);
++            self.gpu = null;
++            return false;
++        }
++        if (!self.gpu_announced) {
++            self.gpu_announced = true;
++            log.info("[ple-gpu] engaged: rows={d} dim=160 affine4 gs32 BF16 exact packing\n", .{rows.len});
++        }
++        return true;
++    }
++
+     fn warmMain(self: *NgramTable) void {
+         var scratch: [WARM_CHUNK]u8 align(16) = undefined;
+         const wio = std.Io.Threaded.global_single_threaded.io();
+@@ -458,7 +520,6 @@ pub const NgramTable = struct {
+         };
+         return std.c.pread(self.fd, dst.ptr, dst.len, @intCast(off)) == @as(isize, @intCast(dst.len));
+     }
+-
+ };
+ 
+ /// Persistent gather workers. Every row's three regions are one SSD read on
+diff --git a/src/transformer.zig b/src/transformer.zig
+index 9ec16ae..19b2047 100644
+--- a/src/transformer.zig
++++ b/src/transformer.zig
+@@ -17230,6 +17230,7 @@ pub const Transformer = struct {
+             advancePlePrev(entry, prev, ids, ctx_len);
+         }
+         const emb_dim: usize = st.table.dim * nh;
++        if (st.table.gatherGpuBf16(rows, pk)) return;
+         const host = try self.allocator.alloc(f32, n * emb_dim);
+         defer self.allocator.free(host);
+         var gclk: ProfClock = if (diagEnvOnCached(&qwen4_profile_fwd_env, "QWEN4_PROFILE_FWD")) ProfClock.init() else undefined;
+diff --git a/src/ple_gpu_bridge.cpp b/src/ple_gpu_bridge.cpp
+new file mode 100644
+index 0000000..c74bf24
+--- /dev/null
++++ b/src/ple_gpu_bridge.cpp
+@@ -0,0 +1,96 @@
++// Experimental zero-copy PLE prefill. Native CPU path remains the fallback.
++#include <mlx/mlx.h>
++#include <mlx/allocator.h>
++#include <sys/mman.h>
++#include <unistd.h>
++#include <cstring>
++#include <cstdio>
++#include <memory>
++#include <chrono>
++#include <cstdlib>
++#include <mach/mach.h>
++#include <sys/resource.h>
++namespace mx=mlx::core;
++namespace {
++using Clock=std::chrono::steady_clock;
++double elapsed(Clock::time_point t){return std::chrono::duration<double,std::milli>(Clock::now()-t).count();}
++void snapshot(const char* tag){
++  task_vm_info_data_t v{};mach_msg_type_number_t count=TASK_VM_INFO_COUNT;
++  task_info(mach_task_self(),TASK_VM_INFO,(task_info_t)&v,&count);
++  struct rusage r{};getrusage(RUSAGE_SELF,&r);
++  std::fprintf(stderr,"[ple-diag] %s active=%zu cache=%zu peak=%zu footprint=%llu resident=%llu faults=%ld pageins=%ld\n",tag,mx::get_active_memory(),mx::get_cache_memory(),mx::get_peak_memory(),v.phys_footprint,v.resident_size,r.ru_minflt,r.ru_majflt);
++}
++struct State {
++  mx::array table, layout;
++  mx::fast::CustomKernelFunction kernel;
++  State(mx::array t,const uint64_t* p,const char* source):table(std::move(t)),layout(p,{7},mx::uint64),
++    kernel(mx::fast::metal_kernel("ple_mmap_affine4_bf16",{"table","rows","layout"},{"out"},source)){}
++};
++mx::array wrap(int fd,size_t bytes) {
++  size_t page=sysconf(_SC_PAGESIZE),length=(bytes+page-1)/page*page;
++  const size_t reserve=size_t(2)<<30;
++  if(mx::get_active_memory()+length+reserve>mx::get_memory_limit())
++    throw std::runtime_error("insufficient MLX memory budget for PLE table plus 2 GiB scratch");
++  void* p=mmap(nullptr,length,PROT_READ,MAP_PRIVATE,fd,0);
++  if(p==MAP_FAILED)throw std::runtime_error("PLE GPU mmap failed");
++  auto mapping=std::shared_ptr<void>(p,[length](void* q){munmap(q,length);});
++  snapshot("before_wrap");
++  auto buf=mx::allocator::make_buffer(p,length);
++  snapshot("after_wrap");
++  if(!buf.ptr())throw std::runtime_error("PLE mapping cannot be wrapped without a copy");
++  try {
++    return mx::array(buf,{int(length/page),int(page)},mx::uint8,
++      [mapping](mx::allocator::Buffer b){mx::allocator::release(b);});
++  }catch(...){mx::allocator::release(buf);throw;}
++}
++}
++extern "C" void* msv_ple_mlx_create(int fd,size_t bytes,const uint64_t* params,const char* source) {
++  try{auto s=new State(wrap(fd,bytes),params,source);
++    std::fprintf(stderr,"[ple-diag] table contiguous=%d nbytes=%zu pointer=%p\n",s->table.flags().row_contiguous,s->table.nbytes(),s->table.data<uint8_t>());return s;}
++  catch(const std::exception& e){std::fprintf(stderr,"[ple-gpu] unavailable: %s\n",e.what());return nullptr;}
++}
++extern "C" void msv_ple_mlx_destroy(void* p){snapshot("before_release");delete static_cast<State*>(p);snapshot("after_release");}
++extern "C" int msv_ple_mlx_diagnostic(void*,size_t n){
++  const char* file=std::getenv("MLX_SERVE_PLE_GPU_DIAGNOSTIC");
++  if(!file)return 1;
++  char mode='G';if(FILE* f=std::fopen(file,"r")){mode=std::fgetc(f);std::fclose(f);}
++  std::fprintf(stderr,"[ple-diag] mode=%c rows=%zu\n",mode,n);snapshot("request");
++  return mode=='D'?-1:mode=='C'?0:1;
++}
++extern "C" int msv_ple_mlx_gather(void* ptr,const int64_t* ids,size_t n,uint16_t* out) {
++  try {
++    auto& s=*static_cast<State*>(ptr);
++    auto t=Clock::now();
++    auto rows=mx::array(ids,{int(n)},mx::int64);
++    auto y=s.kernel({s.table,rows,s.layout},{{int(n),160}},{mx::bfloat16},
++      {int(n*160),1,1},{256,1,1},{},{},false,mx::Device::gpu)[0];
++    mx::eval(y);
++    double eval_ms=elapsed(t);t=Clock::now();
++    std::memcpy(out,y.data<mx::bfloat16_t>(),n*160*2);
++    std::fprintf(stderr,"[ple-diag] gather rows=%zu eval_ms=%.3f copy_ms=%.3f\n",n,eval_ms,elapsed(t));
++    snapshot("after_gather");
++    return 0;
++  }catch(const std::exception& e){std::fprintf(stderr,"[ple-gpu] gather failed: %s\n",e.what());return 1;}
++}
++
++extern "C" void* msv_ple_direct_create(void*,size_t,const uint64_t*,const char*);
++extern "C" int msv_ple_direct_gather(void*,const int64_t*,size_t,uint16_t*);
++extern "C" void msv_ple_direct_destroy(void*);
++namespace {struct Handle {bool direct;void* ptr;};}
++extern "C" void* msv_ple_gpu_create(int fd,size_t bytes,const uint64_t* params,const char* source,void* map){
++  bool direct=std::getenv("MLX_SERVE_PLE_GPU_DIRECT") && std::getenv("MLX_SERVE_PLE_GPU_DIRECT")[0]=='1';
++  void* ptr=direct?msv_ple_direct_create(map,bytes,params,source):msv_ple_mlx_create(fd,bytes,params,source);
++  return ptr?new Handle{direct,ptr}:nullptr;
++}
++extern "C" void msv_ple_gpu_destroy(void* ptr){
++  auto h=static_cast<Handle*>(ptr);
++  if(h->direct)msv_ple_direct_destroy(h->ptr);else msv_ple_mlx_destroy(h->ptr);
++  delete h;
++}
++extern "C" int msv_ple_gpu_gather(void* ptr,const int64_t* ids,size_t n,uint16_t* out){
++  auto h=static_cast<Handle*>(ptr);
++  return h->direct?msv_ple_direct_gather(h->ptr,ids,n,out):msv_ple_mlx_gather(h->ptr,ids,n,out);
++}
++extern "C" int msv_ple_gpu_diagnostic(void* ptr,size_t n){
++  return msv_ple_mlx_diagnostic(nullptr,n);
++}
+diff --git a/src/ple_gpu_direct.mm b/src/ple_gpu_direct.mm
+new file mode 100644
+index 0000000..0fc76c8
+--- /dev/null
++++ b/src/ple_gpu_direct.mm
+@@ -0,0 +1,62 @@
++// Research-only direct Metal PLE. Borrow the CPU mapping; owner must outlive State.
++#import <Foundation/Foundation.h>
++#import <Metal/Metal.h>
++#include <unistd.h>
++#include <chrono>
++#include <cstdio>
++#include <cstring>
++#include <stdexcept>
++#include <unordered_set>
++namespace {
++using Clock=std::chrono::steady_clock;
++double ms(Clock::time_point t){return std::chrono::duration<double,std::milli>(Clock::now()-t).count();}
++struct State {
++  id<MTLDevice> device;
++  id<MTLBuffer> table,ids,out;
++  id<MTLComputePipelineState> pipeline;
++  id<MTLCommandQueue> queue;
++  uint64_t params[7];
++  bool stats=false;
++};
++}
++extern "C" void* msv_ple_direct_create(void* map,size_t bytes,const uint64_t* params,const char* source){@autoreleasepool{
++  try{
++    auto s=new State{};
++    s->device=MTLCreateSystemDefaultDevice();
++    size_t page=sysconf(_SC_PAGESIZE),length=(bytes+page-1)/page*page;
++    if(length>s->device.maxBufferLength){delete s;return nullptr;}
++    s->table=[s->device newBufferWithBytesNoCopy:map length:length options:MTLResourceStorageModeShared deallocator:nil];
++    if(!s->table || s->table.contents!=map){delete s;return nullptr;}
++    std::memcpy(s->params,params,7*sizeof(uint64_t));
++    NSString* code=[@"#include <metal_stdlib>\nusing namespace metal;\nkernel void ple_direct(const device uchar* table [[buffer(0)]],const device long* rows [[buffer(1)]],constant ulong* layout [[buffer(2)]],device bfloat* out [[buffer(3)]],constant uint& row_count [[buffer(4)]],uint3 thread_position_in_grid [[thread_position_in_grid]]) {int rows_shape[1]={int(row_count)};\n" stringByAppendingString:[NSString stringWithUTF8String:source]];
++    code=[code stringByAppendingString:@"\n}"];
++    NSError* error=nil;MTLCompileOptions* options=[MTLCompileOptions new];options.mathMode=MTLMathModeSafe;
++    auto library=[s->device newLibraryWithSource:code options:options error:&error];
++    if(!library){std::fprintf(stderr,"[ple-direct] compile: %s\n",error.localizedDescription.UTF8String);delete s;return nullptr;}
++    s->pipeline=[s->device newComputePipelineStateWithFunction:[library newFunctionWithName:@"ple_direct"] error:&error];
++    s->queue=[s->device newCommandQueue];
++    if(!s->pipeline || !s->queue){delete s;return nullptr;}
++    std::fprintf(stderr,"[ple-direct] table_bytes=%zu same_cpu_mapping=1 separate_queue=1 external_buffer_not_in_mlx_pool=1\n",length);
++    return s;
++  }catch(const std::exception& e){std::fprintf(stderr,"[ple-direct] create: %s\n",e.what());return nullptr;}
++}}
++extern "C" void msv_ple_direct_destroy(void* ptr){delete static_cast<State*>(ptr);}
++extern "C" int msv_ple_direct_gather(void* ptr,const int64_t* ids,size_t n,uint16_t* out){@autoreleasepool{
++  try{
++    auto& s=*static_cast<State*>(ptr);auto t=Clock::now();
++    if(!s.ids || s.ids.length<n*8)s.ids=[s.device newBufferWithLength:n*8 options:MTLResourceStorageModeShared];
++    if(!s.out || s.out.length<n*320)s.out=[s.device newBufferWithLength:n*320 options:MTLResourceStorageModeShared];
++    if(!s.ids || !s.out)return 1;
++    std::memcpy(s.ids.contents,ids,n*8);double prepare=ms(t);t=Clock::now();
++    auto cmd=[s.queue commandBuffer];auto enc=[cmd computeCommandEncoder];
++    [enc setComputePipelineState:s.pipeline];[enc setBuffer:s.table offset:0 atIndex:0];[enc setBuffer:s.ids offset:0 atIndex:1];[enc setBytes:s.params length:sizeof(s.params) atIndex:2];[enc setBuffer:s.out offset:0 atIndex:3];
++    uint32_t count=n;[enc setBytes:&count length:4 atIndex:4];
++    [enc dispatchThreads:MTLSizeMake(n*160,1,1) threadsPerThreadgroup:MTLSizeMake(256,1,1)];[enc endEncoding];[cmd commit];[cmd waitUntilCompleted];
++    if(cmd.status==MTLCommandBufferStatusError){std::fprintf(stderr,"[ple-direct] execute: %s\n",cmd.error.localizedDescription.UTF8String);return 1;}
++    double execute=ms(t),gpu=(cmd.GPUEndTime-cmd.GPUStartTime)*1000;t=Clock::now();
++    std::memcpy(out,s.out.contents,n*320);
++    std::fprintf(stderr,"[ple-direct] rows=%zu prepare_ms=%.3f execute_ms=%.3f gpu_ms=%.3f copy_ms=%.3f\n",n,prepare,execute,gpu,ms(t));
++    if(n>1024 && !s.stats){s.stats=true;std::unordered_set<int64_t> unique(ids,ids+n);std::fprintf(stderr,"[ple-direct] selected_rows=%zu unique_rows=%zu\n",n,unique.size());}
++    return 0;
++  }catch(const std::exception& e){std::fprintf(stderr,"[ple-direct] gather: %s\n",e.what());return 1;}
++}}
+diff --git a/src/kernels/ple_gpu.metal b/src/kernels/ple_gpu.metal
+new file mode 100644
+index 0000000..a2cef7a
+--- /dev/null
++++ b/src/kernels/ple_gpu.metal
+@@ -0,0 +1,14 @@
++const uint i=thread_position_in_grid.x;
++const uint dim=160;
++if(ulong(i)>=ulong(rows_shape[0])*dim)return;
++const ulong row=ulong(rows[i/dim]);
++const uint c=i%dim,g=c/32;
++const device uint* w=reinterpret_cast<const device uint*>(table+layout[0]);
++const device ushort* s=reinterpret_cast<const device ushort*>(table+layout[1]);
++const device ushort* b=reinterpret_cast<const device ushort*>(table+layout[2]);
++uint q=(w[row*20+c/8]>>(4*(c%8)))&15u;
++float sc=as_type<float>(uint(s[row*5+g])<<16);
++float bi=as_type<float>(uint(b[row*5+g])<<16);
++uint bits=as_type<uint>(float(q)*sc+bi);
++// Match the host's explicit BF16 round-to-nearest-even conversion.
++out[i]=as_type<bfloat>(ushort((bits+0x7fffu+((bits>>16)&1u))>>16));

@@ -1,0 +1,6 @@
+[ple-direct] table_bytes=32000163840 same_cpu_mapping=1 separate_queue=1 external_buffer_not_in_mlx_pool=1
+[ple-direct] rows=131072 prepare_ms=0.093 execute_ms=11282.301 gpu_ms=0.323 copy_ms=2.329
+[ple-direct] selected_rows=131072 unique_rows=131046
+[ple-direct] rows=131072 prepare_ms=0.018 execute_ms=2.358 gpu_ms=1.799 copy_ms=0.661
+[ple-direct] rows=131072 prepare_ms=0.017 execute_ms=3.862 gpu_ms=3.705 copy_ms=0.642
+[ple-direct] rows=131072 prepare_ms=0.015 execute_ms=1.381 gpu_ms=0.828 copy_ms=0.654

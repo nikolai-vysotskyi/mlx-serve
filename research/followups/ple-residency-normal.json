@@ -1,0 +1,104 @@
+{
+  "diagnostic": true,
+  "profile_sync_per_block": false,
+  "binary_sha256": "11e040b7b47e32d261704e48ba5e9cb170e238265c17c21c88fa0120a6c75377",
+  "records": [
+    {
+      "phase": "ready",
+      "elapsed_s": 56.895333624999694,
+      "response": {
+        "wall_s": 56.68367370899978,
+        "response": {
+          "id": "msg_1789231056258",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "Paris"
+            }
+          ],
+          "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 21,
+            "output_tokens": 1,
+            "cache_read_input_tokens": 0
+          },
+          "timings": {
+            "prompt_n": 21,
+            "cached_n": 0,
+            "prompt_ms": 126.676,
+            "prompt_per_second": 165.777,
+            "predicted_n": 1,
+            "predicted_ms": 35.789,
+            "predicted_per_second": 27.941,
+            "tokenize_ms": 13.617
+          }
+        }
+      },
+      "memory": {
+        "active_bytes": 105224031812,
+        "peak_bytes": 105495082876,
+        "available_bytes": 20493565952,
+        "max_safe_context": 1024,
+        "cache_bytes": 73717844
+      },
+      "vm": {
+        "vm_stat": "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                    34062.\nPages active:                                 598504.\nPages inactive:                               771015.\nPages speculative:                              1601.\nPages throttled:                                   0.\nPages wired down:                            6744027.\nPages purgeable:                                 483.\n\"Translation faults\":                      173838348.\nPages copy-on-write:                        24263408.\nPages zero filled:                         137034078.\nPages reactivated:                           3086078.\nPages purged:                                 447183.\nFile-backed pages:                            982193.\nAnonymous pages:                              388927.\nPages stored in compressor:                   760015.\nPages occupied by compressor:                   7016.\nDecompressions:                             28288210.\nCompressions:                               29386883.\nPageins:                                    45663809.\nPageouts:                                      11710.\nSwapins:                                     2863008.\nSwapouts:                                    3325787.\nPages tagged:                                 106129.\nPages tagged resident:                         87756.\nPages tagged compressed:                       18373.\nPages tag-storage:                            262144.\nPages tag-storage holding tags:                 4542.\nPages tag-storage free:                       150845.\nPages tag-storage non-tag pageable:           106740.\nPages tag-storage non-tag wired:                  17.\nBytes of compressed tags:                    2895232.\nTagged compressions:                           43355.\nTagged decompressions:                         22010.\n",
+        "swap": "vm.swapusage: total = 7168.00M  used = 5888.94M  free = 1279.06M  (encrypted)\n"
+      }
+    },
+    {
+      "phase": "G",
+      "result": {
+        "wall_s": 6.180395332999979,
+        "ttft_s": 5.983888167000259,
+        "text": "MAGNOLIA-7731",
+        "usage": {
+          "input_tokens": 12454,
+          "output_tokens": 10,
+          "cache_read_input_tokens": 0
+        }
+      },
+      "memory": {
+        "active_bytes": 105224031684,
+        "peak_bytes": 108549639974,
+        "available_bytes": 20031193088,
+        "max_safe_context": 1024,
+        "cache_bytes": 390365257
+      },
+      "vm": {
+        "vm_stat": "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                   247813.\nPages active:                                 564870.\nPages inactive:                               562045.\nPages speculative:                              2220.\nPages throttled:                                   0.\nPages wired down:                            6769767.\nPages purgeable:                                 248.\n\"Translation faults\":                      173939573.\nPages copy-on-write:                        24273629.\nPages zero filled:                         137788251.\nPages reactivated:                           3088294.\nPages purged:                                 447233.\nFile-backed pages:                            742336.\nAnonymous pages:                              386799.\nPages stored in compressor:                   762593.\nPages occupied by compressor:                   9767.\nDecompressions:                             28296297.\nCompressions:                               29398233.\nPageins:                                    45666084.\nPageouts:                                      11896.\nSwapins:                                     2863823.\nSwapouts:                                    3325787.\nPages tagged:                                 105751.\nPages tagged resident:                         86960.\nPages tagged compressed:                       18791.\nPages tag-storage:                            262144.\nPages tag-storage holding tags:                 4542.\nPages tag-storage free:                       150671.\nPages tag-storage non-tag pageable:           106914.\nPages tag-storage non-tag wired:                  17.\nBytes of compressed tags:                    2963392.\nTagged compressions:                           43856.\nTagged decompressions:                         22092.\n",
+        "swap": "vm.swapusage: total = 7168.00M  used = 5880.94M  free = 1287.06M  (encrypted)\n"
+      },
+      "server_log": " /v1/messages (1 msgs, max_tokens=24, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, tools=0b, tool_msgs=0)\n  > \"Remember this passphrase: MAGNOLIA-7731.\n        \"\\n\" ++\n        \"auto i_state =...\"\n  prompt=12454 tokens, max_gen=24, ctx=131072\n  pld=enabled (streaming, draft_len=5, key_len=3)\n[hc-prefill] engaged: S=8192 B=1 pending=false native_inject=true\n[gdn-prefill] engaged: S=8192 B=1 cold=true\n[ple-diag] mode=G rows=131072\n[ple-diag] request active=105224064600 cache=73685056 peak=105495082876 footprint=73710730432 resident=9216589824 faults=2519053 pageins=1953427\n[ple-diag] gather rows=131072 eval_ms=3.086 copy_ms=4.234\n[ple-diag] after_gather active=105267056216 cache=73685056 peak=105495082876 footprint=73790848240 resident=9301688320 faults=2524247 pageins=1953427\n[ple-gpu] engaged: rows=131072 dim=160 affine4 gs32 BF16 exact packing\n[qsa] sparse attention engaged: kv=8192 blocks=2048 top-512 (budget 2048, ratio 4)\n[qsa-select] engaged (S=8192 nb=2048 k=512 tg=256) \u2014 MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain\n[qsa-pair] engaged: S=8192 kv=8192 KB=512 B=1\n[residency] created residency set 14 (max_bytes_per_set=5505 MB)\n[ple-diag] mode=G rows=68176\n[ple-diag] request active=105784987254 cache=0 peak=108549639974 footprint=77976255752 resident=9235660800 faults=2527020 pageins=1953427\n[ple-diag] gather rows=68176 eval_ms=7.009 copy_ms=6.273\n[ple-diag] after_gather active=105807367798 cache=0 peak=108549639974 footprint=77422574856 resident=9236332544 faults=2529621 pageins=1953427\n[qsa-score] engaged (S=1 nb=3113 layout=base nsg=4 nsh=98) \u2014 MLX_SERVE_QSA_SCORE_FUSED=0 restores the composed chain\n[qsa-select] engaged (S=1 nb=3113 k=512 tg=1024) \u2014 MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain\n[qsa-decode-gather] engaged (S=1 kv=12454 rows=2050) (MLX_SERVE_QSA_DECODE_GATHER=0 restores the dense mask arm)\n  [prefill-trace] tokens=12454 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=5876ms eval=8ms last_token=3ms total=5889ms\n  [qsa-arms] qsa=decode_gather calls=180 mask=0 decode=156 verify=0 prefill=24\n  <- 12454+10 tokens streamed [prefill: 2104.8 tok/s, decode: 45.3 tok/s] [end_turn]\n"
+    },
+    {
+      "phase": "D",
+      "result": {
+        "wall_s": 13.809753874998933,
+        "ttft_s": 13.618849167000008,
+        "text": "MAGNOLIA-7731",
+        "usage": {
+          "input_tokens": 12454,
+          "output_tokens": 10,
+          "cache_read_input_tokens": 0
+        }
+      },
+      "memory": {
+        "active_bytes": 73223867788,
+        "peak_bytes": 108549639974,
+        "available_bytes": 51923550208,
+        "max_safe_context": 262144,
+        "cache_bytes": 390368490
+      },
+      "vm": {
+        "vm_stat": "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                  1918746.\nPages active:                                 648913.\nPages inactive:                               561581.\nPages speculative:                            201783.\nPages throttled:                                   0.\nPages wired down:                            4816903.\nPages purgeable:                                 589.\n\"Translation faults\":                      174266735.\nPages copy-on-write:                        24284513.\nPages zero filled:                         138318929.\nPages reactivated:                           3088304.\nPages purged:                                 447233.\nFile-backed pages:                           1018104.\nAnonymous pages:                              394173.\nPages stored in compressor:                   759606.\nPages occupied by compressor:                   9029.\nDecompressions:                             28298861.\nCompressions:                               29398233.\nPageins:                                    45939419.\nPageouts:                                      11896.\nSwapins:                                     2864693.\nSwapouts:                                    3325787.\nPages tagged:                                 105655.\nPages tagged resident:                         87068.\nPages tagged compressed:                       18587.\nPages tag-storage:                            262144.\nPages tag-storage holding tags:                 4527.\nPages tag-storage free:                       150375.\nPages tag-storage non-tag pageable:           107225.\nPages tag-storage non-tag wired:                  17.\nBytes of compressed tags:                    2921728.\nTagged compressions:                           43856.\nTagged decompressions:                         22289.\n",
+        "swap": "vm.swapusage: total = 7168.00M  used = 5872.94M  free = 1295.06M  (encrypted)\n"
+      },
+      "server_log": "essages (1 msgs, max_tokens=24, temp=0.00, top_p=0.95, top_k=20, stream=true, thinking=false, tools=0b, tool_msgs=0)\n  > \"Remember this passphrase: MAGNOLIA-7731.\n        \"\\n\" ++\n        \"auto i_state =...\"\n  prompt=12454 tokens, max_gen=24, ctx=131072\n  pld=enabled (streaming, draft_len=5, key_len=3)\n[ple-diag] mode=D rows=131072\n[ple-diag] request active=105224064464 cache=390332477 peak=108549639974 footprint=74191338736 resident=9242279936 faults=2532720 pageins=1953427\n[ple-diag] before_release active=105224064464 cache=390332477 peak=108549639974 footprint=74191338736 resident=9242279936 faults=2532720 pageins=1953427\n[ple-diag] after_release active=73223900568 cache=390332533 peak=108549639974 footprint=74191338736 resident=9242279936 faults=2532720 pageins=1953427\n[qwen4] PLE prefill gather: SERIAL mmap walk (prefill width: 131072 rows; the pool engages past kv 262144, QWEN4_PLE_PREFETCH_PREFILL_MIN_KV overrides)\n  [prefill-trace] tokens=12454 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=13546ms eval=4ms last_token=1ms total=13553ms\n  [qsa-arms] qsa=decode_gather calls=180 mask=0 decode=156 verify=0 prefill=24\n  <- 12454+10 tokens streamed [prefill: 917.2 tok/s, decode: 47.6 tok/s] [end_turn]\n"
+    }
+  ]
+}

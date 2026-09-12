@@ -1,0 +1,13 @@
+[ple-diag] before_wrap active=72936519468 cache=18984928 peak=72936519474 footprint=73317257104 resident=63262064640 faults=4465688 pageins=26
+[ple-diag] after_wrap active=104936683308 cache=18984928 peak=104936683308 footprint=73317257104 resident=63245287424 faults=4465688 pageins=26
+[ple-diag] table contiguous=1 nbytes=32000163840 pointer=<omitted>
+[ple-diag] gather rows=3 eval_ms=10091.995 copy_ms=0.005
+[ple-diag] after_gather active=104936684412 cache=18983904 peak=104936684412 footprint=73342029712 resident=16038297600 faults=2512578 pageins=1953160
+[qwen4] ngram table warm: started, 29.8 GB in the background (page cache; MLX_SERVE_NGRAM_WARM=0 disables)
+[qwen4] ngram table warm: 8.0/29.8 GB after 1 s
+[qwen4] ngram table warm: 16.0/29.8 GB after 5 s
+[qwen4] ngram table warm: 24.0/29.8 GB after 5 s
+[qwen4] ngram table warm: done, 29.8 GB in 6.1 s (page cache; MLX_SERVE_NGRAM_WARM=0 disables)
+[qwen4] MTP draft rerank: coarse lm_head 3-bit (265 MB, 35931 ms) + exact top-32 rescoring (MLX_SERVE_MTP_DRAFT_RERANK=0 restores full-vocab drafts)
+[ple-diag] after_gather active=105267056216 cache=73685056 peak=105495082876 footprint=73790848240 resident=9301688320 faults=2524247 pageins=1953427
+[ple-diag] after_gather active=105807367798 cache=0 peak=108549639974 footprint=77422574856 resident=9236332544 faults=2529621 pageins=1953427

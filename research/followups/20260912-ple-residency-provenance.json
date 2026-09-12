@@ -1,0 +1,21 @@
+{
+  "purpose": "diagnosis and bounded PLE component; no new accepted model speedup",
+  "base_production_commit": "1b1a4dfbfd3d5f5c2bc9c4e61963902d5089d918",
+  "research_parent": "4e83a090530a3f68a35db241038548f56690a612",
+  "hardware": "Apple M5 Max, 128 GiB",
+  "runtime_commit": "1f8e74e3f12f31365464a6867c6579f0e9b29d85",
+  "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+  "direct_diagnostic_binary_sha256": "4c1691fc3dc1bdff829a14360b336f6f7e40cf60361c26bb21924275190618ed",
+  "direct_model_validation": "failed: first 15,715-token request returned an empty answer; subsequent requested arms were not executed",
+  "full_zig_suite_run": false,
+  "source_sha256": {
+    "build.zig": "1833d0be1c4cd6a2cc948ab03ba04d1a25a36fe110030168dc14403c823fe188",
+    "src/qwen4_exp.zig": "285513a29f23cfc10ce35057c478f360a5048f16aa7858db6f77f0b0ed2376fc",
+    "src/transformer.zig": "24b0d46ab05edeebe21ce31bd012fc03b7831dc572771d36e0ed0a34a01b2953",
+    "src/ple_gpu_bridge.cpp": "22526f803f06c310969826c22a0ac07a20e9d4cc92e2616766939745cccbf3cb",
+    "src/ple_gpu_direct.mm": "7bd5b8298ee177f3f3fd60acd88317559dd5c323d2f03d01278a84048bdb1e8b",
+    "src/kernels/ple_gpu.metal": "7de2c1d738784526a998995932e133daa1f25c826471397a03da5f4fc0a33832"
+  },
+  "packed_probe_binary_sha256": "aa1e9e37cbe364f9ec5ad9e65d47042524f14f7397eaffcf4309aca8846754b5",
+  "packed_probe_source_sha256": "de63d0f2acb67240a691c05b12c3b58e309caa8ca6ca488ad1a55098635796db"
+}

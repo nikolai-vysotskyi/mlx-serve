@@ -1,0 +1,5 @@
+{"arm":"cpu_first","ms":9422.16}
+{"arm":"gpu_first","ms":11290.6,"bit_exact":true}
+{"arm":"cpu_warm","median_ms":55.4086,"bit_exact":true,"rows":131072,"dim":160}
+{"arm":"gpu_warm","median_ms":3.06075,"bit_exact":true,"rows":131072,"dim":160}
+{"arm":"cpu_warm","median_ms":54.8837,"bit_exact":true,"rows":131072,"dim":160}

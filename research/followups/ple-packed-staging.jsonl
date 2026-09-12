@@ -1,0 +1,7 @@
+{"table_bytes":32000153976,"max_buffer_bytes":86586540032}
+{"arm":"cpu_first","ms":291.193}
+{"arm":"gpu_first","ms":26.9016,"bit_exact":true}
+{"arm":"cpu_warm","median_ms":54.7411,"bit_exact":true,"rows":131072,"unique_rows":131046,"packed_capacity_bytes":13107200,"output_bytes":41943040}
+{"arm":"stage_misses_plus_gpu","median_ms":16.5392,"bit_exact":true,"rows":131072,"unique_rows":131046,"packed_capacity_bytes":13107200,"output_bytes":41943040}
+{"arm":"cache_hits_plus_gpu","median_ms":1.73475,"bit_exact":true,"rows":131072,"unique_rows":131046,"packed_capacity_bytes":13107200,"output_bytes":41943040}
+{"arm":"cpu_warm","median_ms":54.2461,"bit_exact":true,"rows":131072,"unique_rows":131046,"packed_capacity_bytes":13107200,"output_bytes":41943040}

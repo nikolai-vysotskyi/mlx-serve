@@ -1,0 +1,15 @@
+[ple-direct] table_bytes=32000163840 same_cpu_mapping=1 separate_queue=1 external_buffer_not_in_mlx_pool=1
+[ple-direct] rows=3 prepare_ms=0.011 execute_ms=10350.920 gpu_ms=0.005 copy_ms=0.001
+[qwen4] MTP draft rerank: coarse lm_head 3-bit (265 MB, 26194 ms) + exact top-32 rescoring (MLX_SERVE_MTP_DRAFT_RERANK=0 restores full-vocab drafts)
+  [prefill-trace] tokens=21 chunks=1 chunk_size=8192 chunk_widths=8192..8192 chunked=4ms eval=79ms last_token=2ms total=86ms
+[short-gen] reason=stop emitted=1 realized=1 ids=[57590] bytes="Paris" path=serial
+[ple-diag] mode=G rows=131072
+[ple-diag] request active=73223900704 cache=73701440 peak=73494918980 footprint=73729457632 resident=7977156608 faults=2517618 pageins=1953153
+[ple-direct] rows=131072 prepare_ms=0.136 execute_ms=3264.668 gpu_ms=0.266 copy_ms=4.659
+[ple-direct] selected_rows=131072 unique_rows=67441
+[ple-diag] mode=G rows=120352
+[ple-diag] request active=73784823358 cache=0 peak=76549476078 footprint=78559788632 resident=7513047040 faults=2525788 pageins=1953153
+[ple-direct] rows=120352 prepare_ms=0.075 execute_ms=1912.078 gpu_ms=0.710 copy_ms=4.074
+  [prefill-trace] tokens=15715 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=15070ms eval=8ms last_token=2ms total=15081ms
+[short-gen] reason=stop emitted=0 realized=0 ids=[] bytes="" path=serial
+  <- 15715+0 tokens (15155ms) [prefill: 1039.9 tok/s, decode: 0.0 tok/s] [stop]
