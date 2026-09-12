@@ -1,0 +1,29 @@
+{
+  "kind": "CPU arithmetic only; no throughput claim",
+  "S": 4096,
+  "KV": 36864,
+  "KB": 512,
+  "results": [
+    {
+      "group_queries": 2,
+      "kv_tiles": 174432,
+      "per_query_tiles": 266113,
+      "packed_16_head_tiles": 307425,
+      "fully_shared_blocks_per_group": 354.689453125
+    },
+    {
+      "group_queries": 4,
+      "kv_tiles": 122057,
+      "per_query_tiles": 276999,
+      "packed_16_head_tiles": 273875,
+      "fully_shared_blocks_per_group": 230.2021484375
+    },
+    {
+      "group_queries": 8,
+      "kv_tiles": 123221,
+      "per_query_tiles": 433669,
+      "packed_16_head_tiles": 444695,
+      "fully_shared_blocks_per_group": 143.23828125
+    }
+  ]
+}

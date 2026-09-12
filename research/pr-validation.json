@@ -1,0 +1,21 @@
+{
+  "commit": "44bd600",
+  "pr": "https://github.com/ddalcu/mlx-serve/pull/408",
+  "machine": "M5 Max 128 GB",
+  "macOS": "26.5",
+  "build": "ReleaseFast: 7/7 steps passed",
+  "test": "zig build test: 9/9 steps, 2349 passed, 154 skipped, 0 failed",
+  "source_sha256": {
+    "src/hc_prefill.zig": "9ea16a05240917ab32b5fcd7803302a788e25dd49b0d4ca56c6e56a681d769eb",
+    "src/qsa_pair.zig": "aa43de71f9b5fd0b9f9b317137c23531eacd4b6cf5544e71ec8b445ec8f2677f",
+    "src/kernels/hc_prefill_mix.metal": "2c07139bedca326bd2fe9c4f356a452567812dbce6944aac698fb7c55ddac892",
+    "src/kernels/hc_prefill_norm.metal": "73df680f3b05a96778bbad75d6b5db803c1269355a9abc20979421ebfd5d6a5e",
+    "src/kernels/qsa_pair.metal": "7771706dfe94e62bc476ef3980d9ac2d29c8c6baef1f24acc426a30e9ee03cf8",
+    "src/kernels/qsa_pair_plan.metal": "434128a07464b987ef59312a4e91591c0e4320ed269537387da07a0b9ab1328f",
+    "src/transformer.zig": "f29b18e74a992ea7545b319e0ee1064e3995064f4a835981f6be240c07d1e7a0",
+    "tests/test_qsa_pair_prefill.py": "0b0f11d7c475a886645230f6efa1362e524733c5d22472aba1f3dd57b87fae2a"
+  },
+  "release_binary_sha256": "6b06c74efaeb1c7b2dc31843bce25b17da0d46d4a4ce08dfbd08058842d21b5d",
+  "http_evidence": "hc_prefill/http-smoke.json; byte-identical production sources; original research checkout binary",
+  "long_prompt_llmprobe_done": false
+}

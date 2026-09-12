@@ -1,6 +1,6 @@
 # Qwen3.8-Flash-Next prefill: current research handoff
 
-Updated 2026-09-12. Implementation checkpoint: `7797ccc`, branch `perf/qwen-prefill-paired-qsa` in `nikolai-vysotskyi/mlx-serve`. Upstream `ddalcu/mlx-serve/main` was refreshed and is still `fa76a4b50b3f54af7e9cd927279f5ba2870f02c6`.
+Updated 2026-09-12. Implementation checkpoint: `7797ccc` (same production sources as PR commit `44bd600`), branch `perf/qwen-prefill-paired-qsa` in `nikolai-vysotskyi/mlx-serve`. Upstream `ddalcu/mlx-serve/main` was refreshed and is still `fa76a4b50b3f54af7e9cd927279f5ba2870f02c6`.
 
 ## Objective and working style
 
@@ -50,7 +50,9 @@ All on/off requests returned `MAGNOLIA-7731`, with zero cached prompt tokens. `h
 - Paired-QSA original float64 validation: 43,008 sampled outputs over four shapes; every row's selected-key multiset matched. Includes B2, changing widths, strided inputs and tails.
 - Newly enabled S8192/KV8192 first chunk: all 8192 rows' selected-key multisets matched, 8192 outputs checked against float64, including positions 2047/2048. Stock/new maximum errors match. See `qsa_pair/first-chunk-validation.jsonl`.
 - Repeated two-shape HTTP runs on the built server passed. The final on arm logs `[qsa-pair] engaged: S=8192 kv=8192`; disabled control logs the existing NAX gather.
-- **Not done:** full Zig suite, dedicated paired-kernel startup probe/fallback, planner-memory admission accounting, broad HC/model-quality validation, and final long-prompt same-session llmprobe A/B. There is no PR yet.
+- **Full suite now passed on the clean PR worktree:** 9/9 steps, 2349 tests passed, 154 skipped, 0 failed. ReleaseFast 7/7 steps also passed. `pr-validation.json` identifies the exact production-source hashes.
+- **Draft PR:** https://github.com/ddalcu/mlx-serve/pull/408 . It contains only the eight production/test files; component probes and research logs remain on this research branch.
+- **Not done:** dedicated paired-kernel startup probe/fallback, planner-memory admission accounting, broad HC/model-quality validation, and final long-prompt same-session llmprobe A/B. The PR stays draft.
 
 Before a PR, read `CONTRIBUTING.md`, `CLAUDE.md`, relevant engine gotchas and `.claude/skills/bench/SKILL.md`. The repository prohibits even a draft PR until that exact tree builds and its full Zig suite passes on a real Apple Silicon Mac in the session. A performance claim in a PR needs the prescribed llmprobe comparison. Keep research logs and discarded prototypes out of the eventual small production PR.
 

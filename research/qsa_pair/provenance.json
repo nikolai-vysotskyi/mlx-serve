@@ -10,9 +10,10 @@
   },
   "fixture_contents": "Only selected block indices from the public-source-code prompt used in earlier local research; no text, weights, activations or credentials.",
   "new_full_model_prefill": null,
-  "full_suite_run_this_turn": false,
+  "full_suite_run_this_turn": true,
   "throughput_target_tok_s": 2802,
   "strictly_greater_than_target": true,
   "release_binary_sha256": "4b3587e2a392adf56c23ca8de70a9fd8a0305df6b0ebf03b23b9427ae8f41efa",
-  "focused_zig_test_passed": true
+  "focused_zig_test_passed": true,
+  "full_suite_evidence": "../pr-validation.json"
 }
