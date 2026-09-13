@@ -1,0 +1,26 @@
+test
++- run test 2 pass, 1 fail (3 total)
+error: 'transformer.test.naxArchSupportedFrom: desktop gen>=17, phone gen>=18' failed:
+       expected 0, found 27
+       /Users/nikolai/mlx-serve/.zig-toolchain/lib/std/testing.zig:111:17: 0x102bbd613 in expectEqualInner__anon_34851 (test)
+                       return error.TestExpectedEqual;
+                       ^
+       /Users/nikolai/mlx-serve/.zig-toolchain/lib/std/testing.zig:75:5: 0x102bbe2e7 in expectEqual (test)
+           return expectEqualInner(T, expected, actual);
+           ^
+       /Users/nikolai/Documents/Codex/2026-09-07/files-mentioned-by-the-user-handoff/work/mlx-serve-prefill-pr/src/transformer.zig:46862:9: 0x102bbe39b in test.naxArchSupportedFrom: desktop gen>=17, phone gen>=18 (test)
+               try testing.expectEqual(@as(u32, 0), naxArchGeneration(arch).gen);
+               ^
+failed command: ./.zig-cache/o/99a2821f195705af101e77cd9d206df0/test --cache-dir=./.zig-cache --seed=0xf4372d5b --listen=-
+
+Build Summary: 7/9 steps succeeded (1 failed); 2/3 tests passed (1 failed)
+test transitive failure
++- run test 2 pass, 1 fail (3 total)
+|  +- compile test debug native-native.26.2 success 1s MaxRSS:395M
+|     +- options cached
+|     +- translate-c cached 36ms MaxRSS:30M
+|     +- translate-c cached 43ms MaxRSS:30M
+|     +- translate-c cached 41ms MaxRSS:30M
++- run test cached
+   +- compile test debug native-native.26.2 cached 42ms MaxRSS:32M
+

@@ -1,0 +1,8 @@
+mlx-serve 26.9.3-dev
+mlx 0.32.2
+mlx-c 56b2d39fc831
+nax on (M5 neural accelerators)
+ggml 0.20.1 (60eeeb608)
+llama.cpp b10472
+gguf 3
+ds4 unknown

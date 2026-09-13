@@ -1,0 +1,26 @@
+{
+  "source_commit": "9644a6bd21a5c8bbfd22f920dc8cb54ceee72d9e",
+  "prior_ci_run": 34762560533,
+  "native_engine": {
+    "passed": 2444,
+    "skipped": 155,
+    "nax_available": true
+  },
+  "air_engine": {
+    "passed": 2430,
+    "skipped": 169,
+    "extra_helper_passed": 20,
+    "nax_available": false,
+    "architecture_override": "MLX_METAL_GPU_ARCH=air64_v27",
+    "separate_cache": true
+  },
+  "pure_regression": {
+    "before": "expected0 found27; failed",
+    "after": "3/3 passed"
+  },
+  "release_fast": "7/7 passed",
+  "binary_sha256": "2a23424cf075b40956f034317ffa7141cd6bf9ba4fd9bcea517523b46ad9fd41",
+  "source_sha256": "79e2fb6688a01bd362628c4574ebb53dcd86819022b0bdc68485702a1045385d",
+  "full_model_benchmark": false,
+  "remote_ci": "pending"
+}
