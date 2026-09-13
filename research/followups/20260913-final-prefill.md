@@ -14,7 +14,7 @@ All new model measurements use `ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit
 | Same pre-wide32 snapshot, fans Full blast, 64,947 tokens | Combination with optional MPP; no matched Automatic control | **2299.9** | Decode48.9; independent approximately2300 observation, not a fan-speed A/B |
 | Rejected wide32 experiment, 64,947 tokens | Chunk32768, wider guards, per-layer eval, padded HC tails | **2016.9** | Regression; excluded from final runtime |
 
-The 087c210 executable SHA256 is `cc7f4574620557b263212e009c7e933783a3e0fac4a00ff778d708467de59d48`. The later pre-wide32 snapshot executable is `283bc95a286117d72fd7f7fb5398acb058ad530fb092171545a3880e8b41bf4e`. The final PR copies this already-built/tested runtime source without changing it; a source manifest identifies the restored snapshot and hashes. **2347.1 belongs to 087c210 without MPP; 2299.9 belongs to the later snapshot with MPP.** Packaging does not retroactively reassign measurements to a new commit or binary.
+The 087c210 executable SHA256 is `cc7f4574620557b263212e009c7e933783a3e0fac4a00ff778d708467de59d48`. The later pre-wide32 snapshot executable is `283bc95a286117d72fd7f7fb5398acb058ad530fb092171545a3880e8b41bf4e`. Consolidation commit b7d9033 copies this already-built/tested runtime source without changing it; a source manifest identifies the restored snapshot and hashes. **2347.1 belongs to 087c210 without MPP; 2299.9 belongs to the later snapshot with MPP.** Packaging does not retroactively reassign measurements to a new commit or binary.
 
 Long-prompt SHA256: `d6927da48d558a30339f665d0536288a7e07394c5f0c4daa23eb7e4246d0037e`; corpus SHA256: `1b0d4f22b5f08c471a93caac3d5f4729be34c64a04e4c0e303a3fc44bcde36a0`. Peak MLX allocations for the matched long pair were78,214,759,746/78,223,208,014 bytes. Full-blast MPP peak was78,216,733,974 bytes. These are MLX allocator observations, not total process/OS memory or a proof of admission safety under pressure.
 
@@ -71,7 +71,7 @@ After training stopped, temporary Full blast fans around5354/5770RPM yielded2299
 
 ## Validation and remaining review gates
 
-The final runtime snapshot was built ReleaseFast7/7 and passed the full Zig suite **2333 passed /154 skipped** on this M5 before packaging. The source manifest confirms136 tracked runtime/build inputs match the tested research snapshot after excluding the failedwide32 changes. The binary and prior test output are identified separately; no new GPU test was run during finalization because the owner reassigned GPU/RAM. No Swift/app code changed.
+The measured pre-wide32 runtime snapshot was built ReleaseFast7/7 and passed the full Zig suite **2333 passed /154 skipped** on this M5 before packaging. The source manifest confirms136 tracked runtime/build inputs at consolidation commit b7d9033 match the tested research snapshot after excluding the failedwide32 changes. The binary and prior test output are identified separately; no new GPU test was run during finalization because the owner reassigned GPU/RAM. No Swift/app code changed.
 
 Coverage includes compiled HC/GDN references, generic HC2/3/4/8 and HC3 red/green, tail integration at8296/13515/15715 tokens, QSA selected-key/float64 oracle through1M KV, PLE row duplicates/lifetime/cancellation/history mismatch, grouping/inverse reduction, padded MoE input and exact tile coverage, HC-upmix compiled parity, live actual-weight/activation comparisons and uncached HTTP recall. Finite fixtures and a passphrase are not a broad model-quality evaluation.
 
@@ -81,9 +81,13 @@ Still open in **#408**, not silently marked completed:
 - QSA broad model-quality acceptance and cooperative-layout startup validation/fallback. New HC-upmix and MoE MPP also need a layout probe/fallback; a NAX capability guard alone is insufficient, and their current unsupported-layout diagnostic can yield NaN. They stay opt-in/draft.
 - Fresh final-combination llmprobe ladder and rollout/admission review for new PLE/MoE buffers. The old ladder proves the old named core head; the new HTTP screen is supporting research evidence, not a replacement.
 - Productionizing the bounded PLE/MoE paths, including pressure/cancellation/architecture review and removal or relocation of research diagnostics before a general rollout. No claim that pressure benefits or every non-M5 case are validated.
-- Reconcile/rebase against current upstream at maintainer handoff. The measured base isfa76a4b; finalization did not silently merge newer main and pretend it was benchmarked. Latest main observed during research was0814cf3ce2; that observation is not a test of that commit.
+- Finalization found a merge conflict and then integrated upstream0814cf3ce2. The adapter retains upstream per-slot speculative PLE capture and deferred gather, and limits the experimental packed path to non-batched slots. See the final PR comment for the separate compile/test status of this integration. No model speed is assigned to it: the measured base remainsfa76a4b, and the new main was not silently substituted into the historical comparisons.
 
 PR remains draft for these concrete reasons. Local research is finalized; merge/readiness and cross-machine validation are separate outstanding work, assigned explicitly in the final escalation.
+
+### Upstream work already credited and retained
+
+The baseline already contains upstream QSA NAX/block-select/score-sheet work, including our#385 contribution integrated by beamivalice through#388 (merge680e5a56d2ca6926785b404efed06d1d85b563f3). It also contains the owned conv-state tail and cadence/admission correction recorded from#366: upstream reported about2.5GB lower peak at4K chunks and neutral prefill, plus correction of the already-fixed-size QSA raw-key ring bill. These are valuable earlier upstream improvements, not new speedups attributable to this final PR. The final source integration also retains newer upstream MTP/batching and per-request Flash-Next state changes.
 
 ## Disposition of every related issue/PR from our side
 
