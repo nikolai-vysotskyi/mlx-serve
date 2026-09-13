@@ -20,3 +20,5 @@ MLX_METAL_GPU_ARCH=air64_v27 .zig-toolchain/zig build test --cache-dir ../pr408-
 ```
 
 Use the normal dylib setup and exclusive GPU lock. Logs are preserved as emitted, including the Zig runner's `failed command` diagnostic on successful runs; judge completion by exit0 and the final success/count summary.
+
+GitHub CI for9644a6b completed successfully: [run34765264300](https://github.com/ddalcu/mlx-serve/actions/runs/34765264300). All Zig, server/app builds and Swift-test steps passed. The final job record is in github-ci-success.json.

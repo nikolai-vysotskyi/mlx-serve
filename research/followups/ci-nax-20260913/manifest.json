@@ -22,5 +22,11 @@
   "binary_sha256": "2a23424cf075b40956f034317ffa7141cd6bf9ba4fd9bcea517523b46ad9fd41",
   "source_sha256": "79e2fb6688a01bd362628c4574ebb53dcd86819022b0bdc68485702a1045385d",
   "full_model_benchmark": false,
-  "remote_ci": "pending"
+  "remote_ci": {
+    "run": 34765264300,
+    "head_sha": "9644a6bd21a5c8bbfd22f920dc8cb54ceee72d9e",
+    "conclusion": "success",
+    "url": "https://github.com/ddalcu/mlx-serve/actions/runs/34765264300",
+    "updated_at": "2026-09-13T15:52:18Z"
+  }
 }
