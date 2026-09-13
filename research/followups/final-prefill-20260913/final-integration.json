@@ -1,0 +1,14 @@
+{
+  "measured_snapshot_consolidation": "b7d9033",
+  "measured_snapshot_packaging_build": "ReleaseFast 7/7, original runtime inputs identical; rebuilt executable is not rebenchmarked",
+  "packaging_binary_sha256": "6404761a05ec2a529082578057ee385738be76a05d3e73adbf8c0877ba4dc596",
+  "upstream": "0814cf3ce2",
+  "integrated_pr_head": "3e1dc4d10cb31c1e0b97ee3c7e70d8ee40f6f556",
+  "integrated_binary_sha256": "7dcdbb0a5516d81b3a14c7cb41fcc19c1de2045973f1577113845a7113487bdb",
+  "integrated_build": "ReleaseFast 7/7",
+  "integrated_full_suite": "2444 passed, 155 skipped (2599 total), 9/9 build steps, exit0; 3m execution, MaxRSS8G",
+  "new_full_model_measurement": false,
+  "merge_resolution": "Preserve upstream per-slot PLE speculative capture and batched deferred gather/error handling; experimental packed path requires non-batched slots. Keep upstream batched GDN tests and own prefill-width test.",
+  "gpu_lock_released": true,
+  "user_gpu_window": "Explicitly authorized after owner freed GPU; no full model run"
+}
