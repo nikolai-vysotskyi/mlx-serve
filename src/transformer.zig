@@ -24309,53 +24309,59 @@ pub const Transformer = struct {
             defer _ = mlx.mlx_array_free(sorted_inds);
             if (grouped) |g| try mlx.check(mlx.mlx_array_set(&sorted_inds, g.sorted)) else try mlx.check(mlx.mlx_take_axis(&sorted_inds, flat_inds, order, 0, self.s));
 
-            // lhs_idx = order // K, shape [N] — picks the source token row
-            const k_arr = mlx.mlx_array_new_int(K);
-            defer _ = mlx.mlx_array_free(k_arr);
-            var lhs_idx = mlx.mlx_array_new();
-            defer _ = mlx.mlx_array_free(lhs_idx);
-            try mlx.check(mlx.mlx_floor_divide(&lhs_idx, order, k_arr, self.s));
-
             // x_flat: [B,S,D] → [B*S, D]
             const bs_d_shape = [_]c_int{ B * S, D };
             var x_flat = mlx.mlx_array_new();
             defer _ = mlx.mlx_array_free(x_flat);
             try mlx.check(mlx.mlx_reshape(&x_flat, expert_x, &bs_d_shape, 2, self.s));
 
-            // x_rep: gather rows by lhs_idx → [N, D], then expand to [N, 1, D]
-            // for gather_qmm (it expects an inner singleton dim before the
-            // contracted feature dim).
-            var x_gathered = mlx.mlx_array_new();
-            defer _ = mlx.mlx_array_free(x_gathered);
-            try mlx.check(mlx.mlx_take_axis(&x_gathered, x_flat, lhs_idx, 0, self.s));
-            const n1d_shape = [_]c_int{ total_inds, 1, D };
-            var x_rep = mlx.mlx_array_new();
-            defer _ = mlx.mlx_array_free(x_rep);
-            try mlx.check(mlx.mlx_reshape(&x_rep, x_gathered, &n1d_shape, 3, self.s));
-
-            // gate / up gather_qmm: x_rep [N,1,D], rhs_indices=sorted_inds [N],
-            // output [N,1,intermediate]. squeeze inner 1 → [N, intermediate].
-            var gate_out_3d = mlx.mlx_array_new();
-            defer _ = mlx.mlx_array_free(gate_out_3d);
-            try gatherExpertMm(&gate_out_3d, x_rep, mw.switch_gate_w, mw.switch_gate_s, mw.switch_gate_b, no_idx, sorted_inds, gate_qp.bits, gate_qp.group_size, gate_qp.mode, true, self.s);
-            var gate_out = mlx.mlx_array_new();
-            defer _ = mlx.mlx_array_free(gate_out);
-            try mlx.check(mlx.mlx_squeeze(&gate_out, gate_out_3d, self.s));
-            try self.addExpertBias(&gate_out, mw.switch_gate_bias, sorted_inds);
-
-            var up_out_3d = mlx.mlx_array_new();
-            defer _ = mlx.mlx_array_free(up_out_3d);
-            try gatherExpertMm(&up_out_3d, x_rep, mw.switch_up_w, mw.switch_up_s, mw.switch_up_b, no_idx, sorted_inds, up_qp.bits, up_qp.group_size, up_qp.mode, true, self.s);
-            var up_out = mlx.mlx_array_new();
-            defer _ = mlx.mlx_array_free(up_out);
-            try mlx.check(mlx.mlx_squeeze(&up_out, up_out_3d, self.s));
-            try self.addExpertBias(&up_out, mw.switch_up_bias, sorted_inds);
-
-            // gpt_oss swaps the activation itself, not just its inputs.
-            const expert_act = if (cfg.swiglu_limit > 0.0)
-                try self.computeGptOssSwiGLU(gate_out, up_out)
+            const mpp_act = if (grouped != null and mg.mppEnabled() and verifyQmmNaxAvailable() and cfg.hidden_act == .silu and cfg.swiglu_limit == 0.0 and cfg.moe_intermediate_size == 640 and gate_qp.group_size == 64 and up_qp.group_size == 64)
+                try mg.gateUp(self.s, x_flat, grouped.?, .{ .w = mw.switch_gate_w, .sc = mw.switch_gate_s, .bi = mw.switch_gate_b }, .{ .w = mw.switch_up_w, .sc = mw.switch_up_s, .bi = mw.switch_up_b })
             else
-                try self.computeGeglu(gate_out, up_out);
+                null;
+            const expert_act = mpp_act orelse fallback: {
+                // lhs_idx = order // K, shape [N] — picks the source token row
+                const k_arr = mlx.mlx_array_new_int(K);
+                defer _ = mlx.mlx_array_free(k_arr);
+                var lhs_idx = mlx.mlx_array_new();
+                defer _ = mlx.mlx_array_free(lhs_idx);
+                try mlx.check(mlx.mlx_floor_divide(&lhs_idx, order, k_arr, self.s));
+
+                // x_rep: gather rows by lhs_idx → [N, D], then expand to [N, 1, D]
+                // for gather_qmm (it expects an inner singleton dim before the
+                // contracted feature dim).
+                var x_gathered = mlx.mlx_array_new();
+                defer _ = mlx.mlx_array_free(x_gathered);
+                try mlx.check(mlx.mlx_take_axis(&x_gathered, x_flat, lhs_idx, 0, self.s));
+                const n1d_shape = [_]c_int{ total_inds, 1, D };
+                var x_rep = mlx.mlx_array_new();
+                defer _ = mlx.mlx_array_free(x_rep);
+                try mlx.check(mlx.mlx_reshape(&x_rep, x_gathered, &n1d_shape, 3, self.s));
+
+                // gate / up gather_qmm: x_rep [N,1,D], rhs_indices=sorted_inds [N],
+                // output [N,1,intermediate]. squeeze inner 1 → [N, intermediate].
+                var gate_out_3d = mlx.mlx_array_new();
+                defer _ = mlx.mlx_array_free(gate_out_3d);
+                try gatherExpertMm(&gate_out_3d, x_rep, mw.switch_gate_w, mw.switch_gate_s, mw.switch_gate_b, no_idx, sorted_inds, gate_qp.bits, gate_qp.group_size, gate_qp.mode, true, self.s);
+                var gate_out = mlx.mlx_array_new();
+                defer _ = mlx.mlx_array_free(gate_out);
+                try mlx.check(mlx.mlx_squeeze(&gate_out, gate_out_3d, self.s));
+                try self.addExpertBias(&gate_out, mw.switch_gate_bias, sorted_inds);
+
+                var up_out_3d = mlx.mlx_array_new();
+                defer _ = mlx.mlx_array_free(up_out_3d);
+                try gatherExpertMm(&up_out_3d, x_rep, mw.switch_up_w, mw.switch_up_s, mw.switch_up_b, no_idx, sorted_inds, up_qp.bits, up_qp.group_size, up_qp.mode, true, self.s);
+                var up_out = mlx.mlx_array_new();
+                defer _ = mlx.mlx_array_free(up_out);
+                try mlx.check(mlx.mlx_squeeze(&up_out, up_out_3d, self.s));
+                try self.addExpertBias(&up_out, mw.switch_up_bias, sorted_inds);
+
+                // gpt_oss swaps the activation itself, not just its inputs.
+                break :fallback if (cfg.swiglu_limit > 0.0)
+                    try self.computeGptOssSwiGLU(gate_out, up_out)
+                else
+                    try self.computeGeglu(gate_out, up_out);
+            };
             defer _ = mlx.mlx_array_free(expert_act);
 
             // down: expand inner singleton → [N,1,intermediate] → gather_qmm → [N,1,hidden]

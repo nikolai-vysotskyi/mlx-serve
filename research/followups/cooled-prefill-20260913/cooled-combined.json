@@ -1,0 +1,767 @@
+{
+  "kind": "HTTP matched screening; not llmprobe",
+  "binary_sha256": "cc7f4574620557b263212e009c7e933783a3e0fac4a00ff778d708467de59d48",
+  "power": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=23199843)\t100%; charged; 0:00 remaining present: true\n",
+  "corpus_sha256": "1b0d4f22b5f08c471a93caac3d5f4729be34c64a04e4c0e303a3fc44bcde36a0",
+  "records": [
+    {
+      "arm": "current",
+      "loaded_s": 11.63289037499635,
+      "memory_before": {
+        "active_bytes": 73223867916,
+        "peak_bytes": 73494918980,
+        "available_bytes": 44006539264,
+        "max_safe_context": 262144,
+        "cache_bytes": 73718420
+      },
+      "env": {
+        "MLX_SERVE_PREFILL_CHUNK": "8192",
+        "MLX_SERVE_PREFILL_TRACE": "1",
+        "MLX_SERVE_QSA_PAIR": "1",
+        "MLX_SERVE_HC_PREFILL": "1",
+        "MLX_SERVE_GDN_PREFILL_FUSED": "1",
+        "MLX_SERVE_PLE_PACKED": "0",
+        "MLX_SERVE_PLE_AHEAD": "0",
+        "MLX_SERVE_PLE_TIMING": "1",
+        "MLX_SERVE_MOE_PREFILL_GROUP": "0",
+        "QWEN4_PREFILL_CADENCE_TIMING": "1",
+        "QWEN4_PREFILL_ARM_SEQUENCE": "070770"
+      },
+      "requests": [
+        {
+          "wall_s": 6.476567999998224,
+          "started_unix": 1789291438.5947452,
+          "ended_unix": 1789291445.0713,
+          "response": {
+            "id": "chatcmpl-1789291445071",
+            "object": "chat.completion",
+            "created": 1789291445,
+            "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+            "system_fingerprint": "mlx-serve",
+            "choices": [
+              {
+                "index": 0,
+                "message": {
+                  "role": "assistant",
+                  "content": "MAGNOLIA-7731"
+                },
+                "logprobs": null,
+                "finish_reason": "stop"
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 13515,
+              "completion_tokens": 10,
+              "total_tokens": 13525,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "prompt_n": 13515,
+              "cached_n": 0,
+              "prompt_ms": 6262.524,
+              "prompt_per_second": 2158.076,
+              "predicted_n": 10,
+              "predicted_ms": 185.349,
+              "predicted_per_second": 53.952,
+              "tokenize_ms": 10.05
+            }
+          },
+          "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe",
+          "cooldown": {
+            "wait_s": 4.062394791995757,
+            "samples": [
+              {
+                "timestamp": "2026-09-13T09:23:56.310465+00:00",
+                "gpu_freq_mhz": 338,
+                "gpu_power": 0.003088930621743202,
+                "temp": {
+                  "cpu_temp_avg": 46.3581428527832,
+                  "gpu_temp_avg": 44.62444305419922
+                },
+                "fans": [
+                  {
+                    "max_rpm": 5349,
+                    "name": "fan0",
+                    "rpm": 0
+                  },
+                  {
+                    "max_rpm": 5777,
+                    "name": "fan1",
+                    "rpm": 0
+                  }
+                ]
+              },
+              {
+                "timestamp": "2026-09-13T09:23:57.318636+00:00",
+                "gpu_freq_mhz": 338,
+                "gpu_power": 0.0014783237129449844,
+                "temp": {
+                  "cpu_temp_avg": 46.46586990356445,
+                  "gpu_temp_avg": 43.97042465209961
+                },
+                "fans": [
+                  {
+                    "max_rpm": 5349,
+                    "name": "fan0",
+                    "rpm": 0
+                  },
+                  {
+                    "max_rpm": 5777,
+                    "name": "fan1",
+                    "rpm": 0
+                  }
+                ]
+              },
+              {
+                "timestamp": "2026-09-13T09:23:58.333531+00:00",
+                "gpu_freq_mhz": 338,
+                "gpu_power": 0.0007467872928828001,
+                "temp": {
+                  "cpu_temp_avg": 45.293174743652344,
+                  "gpu_temp_avg": 43.62928009033203
+                },
+                "fans": [
+                  {
+                    "max_rpm": 5349,
+                    "name": "fan0",
+                    "rpm": 0
+                  },
+                  {
+                    "max_rpm": 5777,
+                    "name": "fan1",
+                    "rpm": 0
+                  }
+                ]
+              }
+            ]
+          },
+          "experiment_arm": 0,
+          "prefill_tps": 2158.1,
+          "decode_tps": 54.0,
+          "memory_after": {
+            "active_bytes": 73223867788,
+            "peak_bytes": 76549476078,
+            "available_bytes": 43281629184,
+            "max_safe_context": 262144,
+            "cache_bytes": 416336701
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=40199b, tools=0b, tool_msgs=0) \n  > \"Nonce 81492017. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=13515 tokens, max_gen=32, ctx=131072\n[prefill-experiment] request=0 arm=0 group=false ple=false hc_upmix=false same_process=true\n[hc-prefill] engaged: S=8192 B=1 pending=false native_inject=true\n[gdn-prefill] engaged: S=8192 B=1 cold=true\n[qwen4] PLE prefill gather: SERIAL mmap walk (prefill width: 131072 rows; the pool engages past kv 262144, QWEN4_PLE_PREFETCH_PREFILL_MIN_KV overrides)\n[qsa] sparse attention engaged: kv=8192 blocks=2048 top-512 (budget 2048, ratio 4)\n[qsa-select] engaged (S=8192 nb=2048 k=512 tg=256) \u2014 MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain\n[qsa-pair] engaged: S=8192 kv=8192 KB=512 B=1\n[prefill-cadence] S=8192 kv=8192 points=12 host_ms=194.830 eval_ms=3844.140 extra_sync=false\n[prefill-cadence] S=5322 kv=13514 points=12 host_ms=77.167 eval_ms=2107.392 extra_sync=false\n[qsa-score] engaged (S=1 nb=3378 layout=base nsg=4 nsh=106) \u2014 MLX_SERVE_QSA_SCORE_FUSED=0 restores the composed chain\n[qsa-select] engaged (S=1 nb=3378 k=512 tg=1024) \u2014 MLX_SERVE_QSA_SELECT_KERNEL=0 restores the argpartition chain\n[qsa-decode-gather] engaged (S=1 kv=13515 rows=2051) (MLX_SERVE_QSA_DECODE_GATHER=0 restores the dense mask arm)\n  [prefill-trace] tokens=13515 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=6223ms eval=5ms last_token=1ms total=6231ms\n  [qsa-arms] qsa=decode_gather calls=180 mask=0 decode=156 verify=0 prefill=24\n  <- 13515+10 tokens (6464ms) [prefill: 2158.1 tok/s, decode: 54.0 tok/s] [stop]\n"
+        },
+        {
+          "wall_s": 6.099053333004122,
+          "started_unix": 1789291468.978546,
+          "ended_unix": 1789291475.077587,
+          "response": {
+            "id": "chatcmpl-1789291475077",
+            "object": "chat.completion",
+            "created": 1789291475,
+            "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+            "system_fingerprint": "mlx-serve",
+            "choices": [
+              {
+                "index": 0,
+                "message": {
+                  "role": "assistant",
+                  "content": "MAGNOLIA-7731"
+                },
+                "logprobs": null,
+                "finish_reason": "stop"
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 13515,
+              "completion_tokens": 10,
+              "total_tokens": 13525,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "prompt_n": 13515,
+              "cached_n": 0,
+              "prompt_ms": 5895.386,
+              "prompt_per_second": 2292.471,
+              "predicted_n": 10,
+              "predicted_ms": 184.728,
+              "predicted_per_second": 54.134,
+              "tokenize_ms": 0.017
+            }
+          },
+          "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe",
+          "cooldown": {
+            "wait_s": 23.80052837500989,
+            "samples": [
+              {
+                "timestamp": "2026-09-13T09:24:26.685903+00:00",
+                "gpu_freq_mhz": 338,
+                "gpu_power": 0.0016020367620512843,
+                "temp": {
+                  "cpu_temp_avg": 49.625,
+                  "gpu_temp_avg": 49.70926284790039
+                },
+                "fans": [
+                  {
+                    "max_rpm": 5349,
+                    "name": "fan0",
+                    "rpm": 0
+                  },
+                  {
+                    "max_rpm": 5777,
+                    "name": "fan1",
+                    "rpm": 0
+                  }
+                ]
+              },
+              {
+                "timestamp": "2026-09-13T09:24:27.695951+00:00",
+                "gpu_freq_mhz": 338,
+                "gpu_power": 0.0008086031884886324,
+                "temp": {
+                  "cpu_temp_avg": 49.006988525390625,
+                  "gpu_temp_avg": 49.365142822265625
+                },
+                "fans": [
+                  {
+                    "max_rpm": 5349,
+                    "name": "fan0",
+                    "rpm": 0
+                  },
+                  {
+                    "max_rpm": 5777,
+                    "name": "fan1",
+                    "rpm": 0
+                  }
+                ]
+              },
+              {
+                "timestamp": "2026-09-13T09:24:28.708119+00:00",
+                "gpu_freq_mhz": 0,
+                "gpu_power": 0.0,
+                "temp": {
+                  "cpu_temp_avg": 49.016448974609375,
+                  "gpu_temp_avg": 49.175594329833984
+                },
+                "fans": [
+                  {
+                    "max_rpm": 5349,
+                    "name": "fan0",
+                    "rpm": 0
+                  },
+                  {
+                    "max_rpm": 5777,
+                    "name": "fan1",
+                    "rpm": 0
+                  }
+                ]
+              }
+            ]
+          },
+          "experiment_arm": 7,
+          "prefill_tps": 2292.5,
+          "decode_tps": 54.1,
+          "memory_after": {
+            "active_bytes": 73223867788,
+            "peak_bytes": 76549476078,
+            "available_bytes": 43358126080,
+            "max_safe_context": 262144,
+            "cache_bytes": 416340797
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=40199b, tools=0b, tool_msgs=0) \n  > \"Nonce 81492017. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=13515 tokens, max_gen=32, ctx=131072\n[prefill-experiment] request=1 arm=7 group=true ple=true hc_upmix=true same_process=true\n[hc-upmix] engaged: rows=8192 HC=4 H=2560 K=320 bits=8 transient_up_eliminated=true weight_cache=false\n[moe-prefill-group] engaged: tokens=8192 E=512 K=10 H=2560 native_projections=true bf16_grouped_reduce=true\n[ple-packed] engaged: rows=131072 unique=67449 packed_bytes=6744900 immutable=true output=mlx-bf16\n[prefill-cadence] S=8192 kv=8192 points=12 host_ms=14.026 eval_ms=3848.170 extra_sync=false\n[prefill-cadence] S=5322 kv=13514 points=12 host_ms=11.234 eval_ms=1991.389 extra_sync=false\n[ple-ahead] chunks=2/2 pack=12.21ms wait=8.45ms row_hits=16190 row_misses=85755 cache_limit_rows=262144\n  [prefill-trace] tokens=13515 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=5865ms eval=6ms last_token=1ms total=5874ms\n  [qsa-arms] qsa=decode_gather calls=180 mask=0 decode=156 verify=0 prefill=24\n  <- 13515+10 tokens (6097ms) [prefill: 2292.5 tok/s, decode: 54.1 tok/s] [stop]\n"
+        },
+        {
+          "wall_s": 6.396598708000965,
+          "started_unix": 1789291520.349875,
+          "ended_unix": 1789291526.74646,
+          "response": {
+            "id": "chatcmpl-1789291526746",
+            "object": "chat.completion",
+            "created": 1789291526,
+            "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+            "system_fingerprint": "mlx-serve",
+            "choices": [
+              {
+                "index": 0,
+                "message": {
+                  "role": "assistant",
+                  "content": "MAGNOLIA-7731"
+                },
+                "logprobs": null,
+                "finish_reason": "stop"
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 13515,
+              "completion_tokens": 10,
+              "total_tokens": 13525,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "prompt_n": 13515,
+              "cached_n": 0,
+              "prompt_ms": 6193.7,
+              "prompt_per_second": 2182.056,
+              "predicted_n": 10,
+              "predicted_ms": 184.767,
+              "predicted_per_second": 54.122,
+              "tokenize_ms": 0.008
+            }
+          },
+          "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe",
+          "cooldown": {
+            "wait_s": 45.15826104200096,
+            "samples": [
+              {
+                "timestamp": "2026-09-13T09:25:18.314553+00:00",
+                "gpu_freq_mhz": 338,
+                "gpu_power": 0.001795185380615294,
+                "temp": {
+                  "cpu_temp_avg": 49.681331634521484,
+                  "gpu_temp_avg": 49.86328125
+                },
+                "fans": [
+                  {
+                    "max_rpm": 5349,
+                    "name": "fan0",
+                    "rpm": 0
+                  },
+                  {
+                    "max_rpm": 5777,
+                    "name": "fan1",
+                    "rpm": 0
+                  }
+                ]
+              },
+              {
+                "timestamp": "2026-09-13T09:25:19.332440+00:00",
+                "gpu_freq_mhz": 338,
+                "gpu_power": 0.0009267840068787336,
+                "temp": {
+                  "cpu_temp_avg": 49.21875,
+                  "gpu_temp_avg": 49.574405670166016
+                },
+                "fans": [
+                  {
+                    "max_rpm": 5349,
+                    "name": "fan0",
+                    "rpm": 0
+                  },
+                  {
+                    "max_rpm": 5777,
+                    "name": "fan1",
+                    "rpm": 0
+                  }
+                ]
+              },
+              {
+                "timestamp": "2026-09-13T09:25:20.339986+00:00",
+                "gpu_freq_mhz": 338,
+                "gpu_power": 0.0011018372606486082,
+                "temp": {
+                  "cpu_temp_avg": 48.90296173095703,
+                  "gpu_temp_avg": 49.31993865966797
+                },
+                "fans": [
+                  {
+                    "max_rpm": 5349,
+                    "name": "fan0",
+                    "rpm": 0
+                  },
+                  {
+                    "max_rpm": 5777,
+                    "name": "fan1",
+                    "rpm": 0
+                  }
+                ]
+              }
+            ]
+          },
+          "experiment_arm": 0,
+          "prefill_tps": 2182.1,
+          "decode_tps": 54.1,
+          "memory_after": {
+            "active_bytes": 73223867788,
+            "peak_bytes": 76549476078,
+            "available_bytes": 43417452544,
+            "max_safe_context": 262144,
+            "cache_bytes": 416339517
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=40199b, tools=0b, tool_msgs=0) \n  > \"Nonce 81492017. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=13515 tokens, max_gen=32, ctx=131072\n[prefill-experiment] request=2 arm=0 group=false ple=false hc_upmix=false same_process=true\n[prefill-cadence] S=8192 kv=8192 points=12 host_ms=65.425 eval_ms=3957.817 extra_sync=false\n[prefill-cadence] S=5322 kv=13514 points=12 host_ms=39.553 eval_ms=2099.982 extra_sync=false\n  [prefill-trace] tokens=13515 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=6163ms eval=5ms last_token=1ms total=6170ms\n  [qsa-arms] qsa=decode_gather calls=180 mask=0 decode=156 verify=0 prefill=24\n  <- 13515+10 tokens (6395ms) [prefill: 2182.1 tok/s, decode: 54.1 tok/s] [stop]\n"
+        },
+        {
+          "wall_s": 5.990797834005207,
+          "started_unix": 1789291575.049648,
+          "ended_unix": 1789291581.040434,
+          "response": {
+            "id": "chatcmpl-1789291581040",
+            "object": "chat.completion",
+            "created": 1789291581,
+            "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+            "system_fingerprint": "mlx-serve",
+            "choices": [
+              {
+                "index": 0,
+                "message": {
+                  "role": "assistant",
+                  "content": "MAGNOLIA-7731"
+                },
+                "logprobs": null,
+                "finish_reason": "stop"
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 13515,
+              "completion_tokens": 10,
+              "total_tokens": 13525,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "prompt_n": 13515,
+              "cached_n": 0,
+              "prompt_ms": 5786.422,
+              "prompt_per_second": 2335.64,
+              "predicted_n": 10,
+              "predicted_ms": 186.001,
+              "predicted_per_second": 53.763,
+              "tokenize_ms": 0.012
+            }
+          },
+          "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe",
+          "cooldown": {
+            "wait_s": 48.1918659160001,
+            "samples": [
+              {
+                "timestamp": "2026-09-13T09:26:13.007076+00:00",
+                "gpu_freq_mhz": 338,
+                "gpu_power": 0.0010311986552551389,
+                "temp": {
+                  "cpu_temp_avg": 49.51028060913086,
+                  "gpu_temp_avg": 49.92540740966797
+                },
+                "fans": [
+                  {
+                    "max_rpm": 5349,
+                    "name": "fan0",
+                    "rpm": 0
+                  },
+                  {
+                    "max_rpm": 5777,
+                    "name": "fan1",
+                    "rpm": 0
+                  }
+                ]
+              },
+              {
+                "timestamp": "2026-09-13T09:26:14.025530+00:00",
+                "gpu_freq_mhz": 338,
+                "gpu_power": 0.0007881625206209719,
+                "temp": {
+                  "cpu_temp_avg": 49.80797576904297,
+                  "gpu_temp_avg": 49.83481979370117
+                },
+                "fans": [
+                  {
+                    "max_rpm": 5349,
+                    "name": "fan0",
+                    "rpm": 0
+                  },
+                  {
+                    "max_rpm": 5777,
+                    "name": "fan1",
+                    "rpm": 0
+                  }
+                ]
+              },
+              {
+                "timestamp": "2026-09-13T09:26:15.039971+00:00",
+                "gpu_freq_mhz": 0,
+                "gpu_power": 0.0,
+                "temp": {
+                  "cpu_temp_avg": 49.217926025390625,
+                  "gpu_temp_avg": 49.60193634033203
+                },
+                "fans": [
+                  {
+                    "max_rpm": 5349,
+                    "name": "fan0",
+                    "rpm": 0
+                  },
+                  {
+                    "max_rpm": 5777,
+                    "name": "fan1",
+                    "rpm": 0
+                  }
+                ]
+              }
+            ]
+          },
+          "experiment_arm": 7,
+          "prefill_tps": 2335.6,
+          "decode_tps": 53.8,
+          "memory_after": {
+            "active_bytes": 73223867788,
+            "peak_bytes": 76549476078,
+            "available_bytes": 43741413376,
+            "max_safe_context": 262144,
+            "cache_bytes": 416337485
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=40199b, tools=0b, tool_msgs=0) \n  > \"Nonce 81492017. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=13515 tokens, max_gen=32, ctx=131072\n[prefill-experiment] request=3 arm=7 group=true ple=true hc_upmix=true same_process=true\n[prefill-cadence] S=8192 kv=8192 points=12 host_ms=19.952 eval_ms=3728.245 extra_sync=false\n[prefill-cadence] S=5322 kv=13514 points=12 host_ms=11.787 eval_ms=1995.720 extra_sync=false\n[ple-ahead] chunks=2/2 pack=18.45ms wait=14.58ms row_hits=16190 row_misses=85755 cache_limit_rows=262144\n  [prefill-trace] tokens=13515 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=5755ms eval=6ms last_token=1ms total=5764ms\n  [qsa-arms] qsa=decode_gather calls=180 mask=0 decode=156 verify=0 prefill=24\n  <- 13515+10 tokens (5989ms) [prefill: 2335.6 tok/s, decode: 53.8 tok/s] [stop]\n"
+        },
+        {
+          "wall_s": 6.005252750008367,
+          "started_unix": 1789291630.807036,
+          "ended_unix": 1789291636.812277,
+          "response": {
+            "id": "chatcmpl-1789291636812",
+            "object": "chat.completion",
+            "created": 1789291636,
+            "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+            "system_fingerprint": "mlx-serve",
+            "choices": [
+              {
+                "index": 0,
+                "message": {
+                  "role": "assistant",
+                  "content": "MAGNOLIA-7731"
+                },
+                "logprobs": null,
+                "finish_reason": "stop"
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 13515,
+              "completion_tokens": 10,
+              "total_tokens": 13525,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "prompt_n": 13515,
+              "cached_n": 0,
+              "prompt_ms": 5798.164,
+              "prompt_per_second": 2330.91,
+              "predicted_n": 10,
+              "predicted_ms": 187.661,
+              "predicted_per_second": 53.288,
+              "tokenize_ms": 0.027
+            }
+          },
+          "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe",
+          "cooldown": {
+            "wait_s": 49.656937666004524,
+            "samples": [
+              {
+                "timestamp": "2026-09-13T09:27:08.737728+00:00",
+                "gpu_freq_mhz": 338,
+                "gpu_power": 0.0006613333825953305,
+                "temp": {
+                  "cpu_temp_avg": 50.17393112182617,
+                  "gpu_temp_avg": 49.828311920166016
+                },
+                "fans": [
+                  {
+                    "max_rpm": 5349,
+                    "name": "fan0",
+                    "rpm": 1348
+                  },
+                  {
+                    "max_rpm": 5777,
+                    "name": "fan1",
+                    "rpm": 1461
+                  }
+                ]
+              },
+              {
+                "timestamp": "2026-09-13T09:27:09.745477+00:00",
+                "gpu_freq_mhz": 0,
+                "gpu_power": 0.0,
+                "temp": {
+                  "cpu_temp_avg": 49.842105865478516,
+                  "gpu_temp_avg": 49.61383819580078
+                },
+                "fans": [
+                  {
+                    "max_rpm": 5349,
+                    "name": "fan0",
+                    "rpm": 1348
+                  },
+                  {
+                    "max_rpm": 5777,
+                    "name": "fan1",
+                    "rpm": 1459
+                  }
+                ]
+              },
+              {
+                "timestamp": "2026-09-13T09:27:10.761186+00:00",
+                "gpu_freq_mhz": 338,
+                "gpu_power": 0.001746017369441688,
+                "temp": {
+                  "cpu_temp_avg": 49.066612243652344,
+                  "gpu_temp_avg": 49.2663688659668
+                },
+                "fans": [
+                  {
+                    "max_rpm": 5349,
+                    "name": "fan0",
+                    "rpm": 1353
+                  },
+                  {
+                    "max_rpm": 5777,
+                    "name": "fan1",
+                    "rpm": 1460
+                  }
+                ]
+              }
+            ]
+          },
+          "experiment_arm": 7,
+          "prefill_tps": 2330.9,
+          "decode_tps": 53.3,
+          "memory_after": {
+            "active_bytes": 73223867788,
+            "peak_bytes": 76549476078,
+            "available_bytes": 43473780736,
+            "max_safe_context": 262144,
+            "cache_bytes": 416342333
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=40199b, tools=0b, tool_msgs=0) \n  > \"Nonce 81492017. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=13515 tokens, max_gen=32, ctx=131072\n[prefill-experiment] request=4 arm=7 group=true ple=true hc_upmix=true same_process=true\n[prefill-cadence] S=8192 kv=8192 points=12 host_ms=22.211 eval_ms=3741.336 extra_sync=false\n[prefill-cadence] S=5322 kv=13514 points=12 host_ms=11.590 eval_ms=1991.884 extra_sync=false\n[ple-ahead] chunks=2/2 pack=22.13ms wait=16.19ms row_hits=16190 row_misses=85755 cache_limit_rows=262144\n  [prefill-trace] tokens=13515 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=5767ms eval=6ms last_token=1ms total=5776ms\n  [qsa-arms] qsa=decode_gather calls=180 mask=0 decode=156 verify=0 prefill=24\n  <- 13515+10 tokens (6003ms) [prefill: 2330.9 tok/s, decode: 53.3 tok/s] [stop]\n"
+        },
+        {
+          "wall_s": 6.4531015410029795,
+          "started_unix": 1789291674.5331042,
+          "ended_unix": 1789291680.986192,
+          "response": {
+            "id": "chatcmpl-1789291680985",
+            "object": "chat.completion",
+            "created": 1789291680,
+            "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+            "system_fingerprint": "mlx-serve",
+            "choices": [
+              {
+                "index": 0,
+                "message": {
+                  "role": "assistant",
+                  "content": "MAGNOLIA-7731"
+                },
+                "logprobs": null,
+                "finish_reason": "stop"
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 13515,
+              "completion_tokens": 10,
+              "total_tokens": 13525,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "prompt_n": 13515,
+              "cached_n": 0,
+              "prompt_ms": 6246.85,
+              "prompt_per_second": 2163.49,
+              "predicted_n": 10,
+              "predicted_ms": 187.858,
+              "predicted_per_second": 53.232,
+              "tokenize_ms": 0.012
+            }
+          },
+          "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe",
+          "cooldown": {
+            "wait_s": 37.60967841699312,
+            "samples": [
+              {
+                "timestamp": "2026-09-13T09:27:52.257745+00:00",
+                "gpu_freq_mhz": 338,
+                "gpu_power": 0.0009515608544461429,
+                "temp": {
+                  "cpu_temp_avg": 49.897613525390625,
+                  "gpu_temp_avg": 49.807106018066406
+                },
+                "fans": [
+                  {
+                    "max_rpm": 5349,
+                    "name": "fan0",
+                    "rpm": 1350
+                  },
+                  {
+                    "max_rpm": 5777,
+                    "name": "fan1",
+                    "rpm": 1452
+                  }
+                ]
+              },
+              {
+                "timestamp": "2026-09-13T09:27:53.269223+00:00",
+                "gpu_freq_mhz": 338,
+                "gpu_power": 0.0008143476443365216,
+                "temp": {
+                  "cpu_temp_avg": 49.67434310913086,
+                  "gpu_temp_avg": 49.62778854370117
+                },
+                "fans": [
+                  {
+                    "max_rpm": 5349,
+                    "name": "fan0",
+                    "rpm": 1347
+                  },
+                  {
+                    "max_rpm": 5777,
+                    "name": "fan1",
+                    "rpm": 1469
+                  }
+                ]
+              },
+              {
+                "timestamp": "2026-09-13T09:27:54.280824+00:00",
+                "gpu_freq_mhz": 0,
+                "gpu_power": 0.0,
+                "temp": {
+                  "cpu_temp_avg": 49.607730865478516,
+                  "gpu_temp_avg": 49.456844329833984
+                },
+                "fans": [
+                  {
+                    "max_rpm": 5349,
+                    "name": "fan0",
+                    "rpm": 1350
+                  },
+                  {
+                    "max_rpm": 5777,
+                    "name": "fan1",
+                    "rpm": 1464
+                  }
+                ]
+              }
+            ]
+          },
+          "experiment_arm": 0,
+          "prefill_tps": 2163.5,
+          "decode_tps": 53.2,
+          "memory_after": {
+            "active_bytes": 73223867788,
+            "peak_bytes": 76549476078,
+            "available_bytes": 43285446656,
+            "max_safe_context": 262144,
+            "cache_bytes": 416348493
+          },
+          "server_log": "POST /v1/chat/completions (1 msgs, max_tokens=32, temp=0.00, top_p=0.95, top_k=20, stream=false, thinking=false, sys=0b, user=40199b, tools=0b, tool_msgs=0) \n  > \"Nonce 81492017. Remember the passphrase MAGNOLIA-7731.\n        \"\\n\" ++\n        \"...\"\n  prompt=13515 tokens, max_gen=32, ctx=131072\n[prefill-experiment] request=5 arm=0 group=false ple=false hc_upmix=false same_process=true\n[prefill-cadence] S=8192 kv=8192 points=12 host_ms=55.238 eval_ms=4005.321 extra_sync=false\n[prefill-cadence] S=5322 kv=13514 points=12 host_ms=46.396 eval_ms=2106.118 extra_sync=false\n  [prefill-trace] tokens=13515 chunks=2 chunk_size=8192 chunk_widths=8192..8192 chunked=6216ms eval=5ms last_token=1ms total=6224ms\n  [qsa-arms] qsa=decode_gather calls=180 mask=0 decode=156 verify=0 prefill=24\n  <- 13515+10 tokens (6451ms) [prefill: 2163.5 tok/s, decode: 53.2 tok/s] [stop]\n"
+        }
+      ]
+    }
+  ],
+  "sequence": "070770",
+  "cooldown": {
+    "gpu_c": 50.0,
+    "fan_max_rpm": 1600,
+    "timeout_s": 180
+  },
+  "monitor_sha256": "8defa263675d5dce206557634cbad15f40934b0efe38eb85e6244ca51226aa66"
+}

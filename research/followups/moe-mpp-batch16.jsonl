@@ -1,0 +1,3 @@
+{"mode":1,"tokens":16384,"BM":64,"max_diff":0,"different_fraction":0,"median_ms":45.322,"grouping_gather_expert_reduce_included":true}
+{"mode":5,"tokens":16384,"BM":64,"max_diff":0,"different_fraction":0,"median_ms":40.328,"grouping_gather_expert_reduce_included":true}
+{"mode":1,"tokens":16384,"BM":64,"max_diff":0,"different_fraction":0,"median_ms":42.2752,"grouping_gather_expert_reduce_included":true}

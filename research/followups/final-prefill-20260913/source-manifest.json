@@ -1,0 +1,25 @@
+{
+  "research_parent": "087c2109e17bcd97cfa4776b35fd8c49a0491b6c",
+  "snapshot": "pre-wide32, restored from before-wide-prefill; MoE MPP included but optional",
+  "measured_binary_sha256": "283bc95a286117d72fd7f7fb5398acb058ad530fb092171545a3880e8b41bf4e",
+  "prior_validation": "ReleaseFast 7/7; full Zig suite 2333 passed, 154 skipped; live mixed-model MoE equality; no additional GPU validation during final packaging",
+  "identical_runtime_build_inputs": 136,
+  "changed_source_sha256": {
+    "src/generate.zig": "9c500954a57cb327601b9d8a1125c9c4f68fbef223a7d56e880b864871aa7809",
+    "src/hc_prefill.zig": "510a2e3160dfcab322556f8836389683e982c9269964cceefad7d4f4a95b4dba",
+    "src/kernels/hc_prefill_upmix.metal": "538a73ce2a4ef7c17bc7c441d009954b2541c41814c9e9c7d2ddac96a595b2c2",
+    "src/kernels/moe_prefill_count.metal": "8a38983124c7673b5bb8393b8186450edecc805a55db54a2a30359385c6de167",
+    "src/kernels/moe_prefill_mpp_gateup.metal": "727ea9e2484ac15cc46a89fded43a8a8da92f85b0ccc2c3a6fa171f17628a4ec",
+    "src/kernels/moe_prefill_mpp_gather.metal": "b456b2e0bbd0476b37eae51f0e7665c2d34f7cdd6fa48ea600f35436f609baab",
+    "src/kernels/moe_prefill_mpp_tiles.metal": "84418e1e50db5e1c918a06a8d1a6fa173165e2bb28c15d14a3841004783f9df7",
+    "src/kernels/moe_prefill_prefix.metal": "a9bdae220546e124b2a3cf7c839d72c786f5a33cb144ab6373cc62be4cb6cbce",
+    "src/kernels/moe_prefill_reduce.metal": "1d8308ff2b4817ae6e3a7dbbf246051bdd5482eec5065cc76e99cf51b85a6a50",
+    "src/kernels/moe_prefill_scatter.metal": "4d4b3e30f32c8236a001bb18e241d7939fddbea310ecd401bf05ce8c01c5675b",
+    "src/kernels/ple_packed.metal": "fd5a2afc0d4b801b625e75fa112aaf8558d602164091065849fd836abe8dc543",
+    "src/moe_prefill.zig": "31991a3f01f8f4650939e736da0aca290c27ce508627cd1ba7273d517e35dd68",
+    "src/ple_packed.zig": "6ed089fb8b8069f83c921508ec961d7a64214609efb9a9f208abf3c0be8154f7",
+    "src/prefill_experiment.zig": "e3a0447233c4bd6af2318a65bb39221498ac7b3705ae012ebc286f1f4df91f7b",
+    "src/tests.zig": "6de7c82b1f7440753c0b012b23e0684a83ae347875c52dd75742e326fbfc6c1b",
+    "src/transformer.zig": "35cba9f2446c32624048b732c8d5251de9a26f799d0af55114ddea67b924c4fe"
+  }
+}

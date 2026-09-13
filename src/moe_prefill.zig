@@ -6,6 +6,83 @@ var kernels: [4]?mlx.mlx_fast_metal_kernel = @splat(null);
 var announced = false;
 var captured_routes: u32 = 0;
 var live_calls: u32 = 0;
+var mpp_kernels: [3]?mlx.mlx_fast_metal_kernel = @splat(null);
+var mpp_announced = false;
+
+pub fn mppEnabled() bool {
+    if (@import("prefill_experiment.zig").moeMpp()) |v| return v;
+    const raw = std.c.getenv("MLX_SERVE_MOE_PREFILL_MPP") orelse return false;
+    return raw[0] == '1';
+}
+
+fn mppKernel(which: usize) !mlx.mlx_fast_metal_kernel {
+    if (mpp_kernels[which]) |k| return k;
+    const names: []const [*:0]const u8 = switch (which) {
+        0 => &.{"sorted"},
+        1 => &.{ "x", "order" },
+        else => &.{ "x_rep", "w", "scales", "biases", "indices_input", "tiles", "up_w", "up_scales", "up_biases", "sigtab" },
+    };
+    const outs = mlx.mlx_vector_string_new_data(if (which == 0) &[_][*:0]const u8{"tiles"} else &[_][*:0]const u8{"out"}, 1);
+    defer _ = mlx.mlx_vector_string_free(outs);
+    const ins = mlx.mlx_vector_string_new_data(names.ptr, names.len);
+    defer _ = mlx.mlx_vector_string_free(ins);
+    const labels = [_][*:0]const u8{ "msv_moe_mpp_tiles", "msv_moe_mpp_gather", "msv_moe_mpp_gateup" };
+    const sources = [_][*:0]const u8{ @embedFile("kernels/moe_prefill_mpp_tiles.metal"), @embedFile("kernels/moe_prefill_mpp_gather.metal"), @embedFile("kernels/moe_prefill_mpp_gateup.metal") };
+    const k = mlx.mlx_fast_metal_kernel_new(labels[which], ins, outs, sources[which], if (which == 2) @embedFile("kernels/qsa_nax_header.metal") else "", true, false);
+    if (k.ctx == null) return error.MetalKernelCompileFailed;
+    mpp_kernels[which] = k;
+    return k;
+}
+
+fn mppApply(which: usize, s: mlx.mlx_stream, inputs: []const mlx.mlx_array, shape: []const c_int, dtype: mlx.mlx_dtype, grid: [3]c_int, tg: [3]c_int) !mlx.mlx_array {
+    const cfg = mlx.mlx_fast_metal_kernel_config_new();
+    defer _ = mlx.mlx_fast_metal_kernel_config_free(cfg);
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(cfg, shape.ptr, shape.len, dtype));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(cfg, grid[0], grid[1], grid[2]));
+    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(cfg, tg[0], tg[1], tg[2]));
+    if (which == 2) {
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(cfg, "T", .bfloat16));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(cfg, "BM", 64));
+        try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_int(cfg, "WM", 2));
+    }
+    const ins = mlx.mlx_vector_array_new_data(inputs.ptr, inputs.len);
+    defer _ = mlx.mlx_vector_array_free(ins);
+    var outs = mlx.mlx_vector_array_new();
+    defer _ = mlx.mlx_vector_array_free(outs);
+    try mlx.check(mlx.mlx_fast_metal_kernel_apply(&outs, try mppKernel(which), ins, cfg, s));
+    return get(outs, 0);
+}
+
+fn makeTiles(s: mlx.mlx_stream, sorted: mlx.mlx_array) !mlx.mlx_array {
+    const n: c_int = @intCast(mlx.mlx_array_size(sorted));
+    return mppApply(0, s, &.{sorted}, &.{ @divTrunc(n, 64) + 512, 3 }, .int32, .{ 512, 1, 1 }, .{ 512, 1, 1 });
+}
+
+fn gatherInputs(s: mlx.mlx_stream, x: mlx.mlx_array, order: mlx.mlx_array) !mlx.mlx_array {
+    const n: c_int = @intCast(mlx.mlx_array_size(order));
+    return mppApply(1, s, &.{ x, order }, &.{ n + 64, 1, 2560 }, .bfloat16, .{ (n + 64) * 320, 1, 1 }, .{ 256, 1, 1 });
+}
+
+pub const Bank = struct { w: mlx.mlx_array, sc: mlx.mlx_array, bi: mlx.mlx_array };
+pub fn gateUp(s: mlx.mlx_stream, x: mlx.mlx_array, g: Group, gate: Bank, up: Bank) !?mlx.mlx_array {
+    if (mlx.mlx_array_dtype(x) != .bfloat16 or mlx.getShape(x).len != 2 or mlx.getShape(x)[1] != 2560) return null;
+    for ([_]Bank{ gate, up }) |bank| {
+        if (!std.mem.eql(c_int, mlx.getShape(bank.w), &.{ 512, 640, 320 }) or !std.mem.eql(c_int, mlx.getShape(bank.sc), &.{ 512, 640, 40 }) or !std.mem.eql(c_int, mlx.getShape(bank.bi), &.{ 512, 640, 40 })) return null;
+        if (mlx.mlx_array_dtype(bank.w) != .uint32 or mlx.mlx_array_dtype(bank.sc) != .bfloat16 or mlx.mlx_array_dtype(bank.bi) != .bfloat16) return null;
+    }
+    const n: c_int = @intCast(mlx.mlx_array_size(g.order));
+    if (n != mlx.getShape(x)[0] * 10) return null;
+    const tiles = try makeTiles(s, g.sorted);
+    defer _ = mlx.mlx_array_free(tiles);
+    const rep = try gatherInputs(s, x, g.order);
+    defer _ = mlx.mlx_array_free(rep);
+    const out = try mppApply(2, s, &.{ rep, gate.w, gate.sc, gate.bi, g.sorted, tiles, up.w, up.sc, up.bi, try @import("hc_prefill.zig").sigmoidTable(s) }, &.{ n, 640 }, .bfloat16, .{ 320, (@divTrunc(n, 64) + 512) * 4, 1 }, .{ 32, 4, 1 });
+    if (!mpp_announced) {
+        mpp_announced = true;
+        log.info("[moe-mpp] engaged: tokens={d} E=512 K=10 H=2560 I=640 bits=4 BM=64 BN=128 gate_up_swiglu=true\n", .{@divTrunc(n, 10)});
+    }
+    return out;
+}
 
 pub fn liveProbe(tokens: c_int) ?u32 {
     if (tokens < 2048 or tokens > 8192 or live_calls >= 4) return null;
@@ -34,6 +111,7 @@ pub fn captureRoutes(a: std.mem.Allocator, indices: mlx.mlx_array, tokens: c_int
 }
 pub fn enabled() bool {
     if (@import("prefill_experiment.zig").group()) |v| return v and !mlx.noGpuBackend();
+    if (mppEnabled()) return !mlx.noGpuBackend();
     const raw = std.c.getenv("MLX_SERVE_MOE_PREFILL_GROUP") orelse return false;
     return raw[0] == '1' and !mlx.noGpuBackend();
 }
@@ -157,6 +235,24 @@ test "MoE prefill grouping bijection and exact native BF16 weighted reduction" {
         try std.testing.expectEqual(ids[order[i]], sorted[i]);
         if (i > 0) try std.testing.expect(sorted[i - 1] <= sorted[i]);
     }
+    const plan = try makeTiles(s, grouped.sorted);
+    defer _ = mlx.mlx_array_free(plan);
+    try mlx.check(mlx.mlx_array_eval(plan));
+    const tiles = mlx.mlx_array_data_int32(plan).?;
+    var seen: [n]u8 = @splat(0);
+    for (0..mlx.mlx_array_size(plan) / 3) |tile| {
+        const count = tiles[tile * 3 + 1];
+        if (count == 0) continue;
+        const start: usize = @intCast(tiles[tile * 3]);
+        const block: usize = @intCast(tiles[tile * 3 + 2]);
+        const end = start + @as(usize, @intCast(count));
+        try std.testing.expect(end <= n);
+        for (start + block * 64..@min(end, start + (block + 1) * 64)) |i| {
+            try std.testing.expectEqual(sorted[start], sorted[i]);
+            seen[i] += 1;
+        }
+    }
+    for (seen) |count| try std.testing.expectEqual(@as(u8, 1), count);
     const host = try a.alloc(u16, n * 2560);
     defer a.free(host);
     var score_bits: [n]u16 = undefined;
@@ -175,6 +271,17 @@ test "MoE prefill grouping bijection and exact native BF16 weighted reduction" {
         rng = rng *% 1664525 +% 1013904223;
         v.* = bf(@as(f32, @floatFromInt(rng % 1024)) / 5413.0);
     }
+    const inputs = mlx.mlx_array_new_data(host.ptr, &[_]c_int{ tokens, 2560 }, 2, .bfloat16);
+    defer _ = mlx.mlx_array_free(inputs);
+    const gathered = try gatherInputs(s, inputs, grouped.order);
+    defer _ = mlx.mlx_array_free(gathered);
+    try mlx.check(mlx.mlx_array_eval(gathered));
+    const gx = mlx.mlx_array_data_bfloat16(gathered).?;
+    for (0..n) |row| {
+        const src = @as(usize, order[row] / 10) * 2560;
+        try std.testing.expectEqualSlices(u16, host[src..][0..2560], gx[row * 2560 ..][0..2560]);
+    }
+    for (gx[n * 2560 ..][0 .. 64 * 2560]) |v| try std.testing.expectEqual(@as(u16, 0), v);
     const down = mlx.mlx_array_new_data(host.ptr, &[_]c_int{ n, 2560 }, 2, .bfloat16);
     defer _ = mlx.mlx_array_free(down);
     const scores = mlx.mlx_array_new_data(&score_bits, &[_]c_int{ tokens, 10, 1 }, 3, .bfloat16);

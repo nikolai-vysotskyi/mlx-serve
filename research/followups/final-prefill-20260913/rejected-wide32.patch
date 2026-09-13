@@ -1,0 +1,245 @@
+--- a/research/followups/bench-prefill-combined.py
++++ b/research/followups/bench-prefill-combined.py
+@@ -10,6 +10,7 @@
+ parser.add_argument('--cooldown-fan-max',type=int,default=1600,help='maximum RPM of either fan at the cooldown gate')
+ parser.add_argument('--cooldown-timeout',type=float,default=180,help='maximum passive cooldown seconds; timeout aborts the comparison')
+ parser.add_argument('--warmup-short',type=int,default=0,help='first N sequence requests use the 13.5K prompt even in long mode')
++parser.add_argument('--chunk',type=int,default=8192,choices=[8192,16384,32768],help='research wide opt-in keeps fusions and bounds memory at larger chunks')
+ parser.add_argument('--out',type=Path,required=True)
+ parser.add_argument('--lock',type=Path,required=True,help='exclusive GPU lock implementing acquire/release OWNER')
+ args=parser.parse_args()
+@@ -68,18 +69,19 @@
+  for name,fused,packed in [('base',False,False),('current',True,False),('packed',True,True),('ahead',True,True),('combined',True,True),('group',True,False)]:
+   if args.sequence and name!='current':continue
+   if name not in os.environ.get('PLE_BENCH_ARMS','current,combined').split(','):continue
+-  env={k:v for k,v in os.environ.items() if not k.startswith(('MLX_SERVE_','QWEN4_'))};env.update(DYLD_LIBRARY_PATH=str(P/'lib/mlx/lib')+':'+str(P/'lib/llama/lib'),MLX_SERVE_PREFILL_CHUNK='8192',MLX_SERVE_PREFILL_TRACE='1',MLX_SERVE_QSA_PAIR=str(int(fused)),MLX_SERVE_HC_PREFILL=str(int(fused)),MLX_SERVE_GDN_PREFILL_FUSED=str(int(fused)),MLX_SERVE_PLE_PACKED=str(int(packed)),MLX_SERVE_PLE_AHEAD=str(int(name in ('ahead','combined'))),MLX_SERVE_PLE_TIMING='1',MLX_SERVE_MOE_PREFILL_GROUP=str(int(name in ('combined','group'))),QWEN4_PREFILL_CADENCE_TIMING='1')
++  env={k:v for k,v in os.environ.items() if not k.startswith(('MLX_SERVE_','QWEN4_'))};env.update(DYLD_LIBRARY_PATH=str(P/'lib/mlx/lib')+':'+str(P/'lib/llama/lib'),MLX_SERVE_PREFILL_CHUNK=str(args.chunk),MLX_SERVE_PREFILL_TRACE='1',MLX_SERVE_QSA_PAIR=str(int(fused)),MLX_SERVE_HC_PREFILL=str(int(fused)),MLX_SERVE_GDN_PREFILL_FUSED=str(int(fused)),MLX_SERVE_PLE_PACKED=str(int(packed)),MLX_SERVE_PLE_AHEAD=str(int(name in ('ahead','combined'))),MLX_SERVE_PLE_TIMING='1',MLX_SERVE_MOE_PREFILL_GROUP=str(int(name in ('combined','group'))),QWEN4_PREFILL_CADENCE_TIMING='1')
+   if os.environ.get('PREFILL_CAPTURE_ROUTES')=='1':env['QWEN4_MOE_CAPTURE_PATH']=str(W/'routes')
+   if os.environ.get('PREFILL_MOE_LIVE_AB')=='1':env['QWEN4_MOE_LIVE_AB']='1'
+   if os.environ.get('PREFILL_HC_UPMIX')=='1':env['MLX_SERVE_HC_UPMIX']='1'
+   if os.environ.get('PREFILL_HC_UPMIX_VERIFY')=='1':env['QWEN4_HC_UPMIX_VERIFY']='1'
+   if os.environ.get('PREFILL_MOE_MPP')=='1':env['MLX_SERVE_MOE_PREFILL_MPP']='1'
+   if args.sequence:env['QWEN4_PREFILL_ARM_SEQUENCE']=args.sequence
++  if args.chunk>8192:env['MLX_SERVE_QWEN_WIDE_PREFILL']='1'
+   env.pop('QWEN4_PROFILE_FWD',None)
+   if os.environ.get('PLE_BENCH_CPU_TIMING')=='1':env['QWEN4_PROFILE_FWD']='1'
+   logpath=W/(TAG+'-'+name+'.log')
+   with logpath.open('w') as log:
+-   start=time.monotonic();server=subprocess.Popen([str(BIN),'serve','--host','127.0.0.1','--port',str(PORT),'--ctx-size','131072','--prefix-cache-entries','0','--prefill-chunk','8192','--kv-quant','off','--no-mtp','--no-pld','--no-drafter'],env=env,stdout=log,stderr=log)
++   start=time.monotonic();server=subprocess.Popen([str(BIN),'serve','--host','127.0.0.1','--port',str(PORT),'--ctx-size','131072','--prefix-cache-entries','0','--prefill-chunk',str(args.chunk),'--kv-quant','off','--no-mtp','--no-pld','--no-drafter'],env=env,stdout=log,stderr=log)
+    monitor=None;monitor_log=None
+    try:
+     while not listening():
+--- a/src/hc_prefill.zig
++++ b/src/hc_prefill.zig
+@@ -26,7 +26,7 @@
+     const ns = mlx.getShape(normalized);
+     if (ns.len != 4 or ns[2] != 4 or ns[3] != 2560 or !geometry(ns[0], ns[1])) return null;
+     const rows = ns[0] * ns[1];
+-    if (rows < 2048 or @mod(rows, 64) != 0 or mlx.mlx_array_size(x) != @as(usize, @intCast(rows * 320))) return null;
++    if (rows < 2048 or mlx.mlx_array_size(x) != @as(usize, @intCast(rows * 320))) return null;
+     if (!std.mem.eql(c_int, mlx.getShape(w), &.{ 10240, 80 }) or !std.mem.eql(c_int, mlx.getShape(sc), &.{ 10240, 5 }) or !std.mem.eql(c_int, mlx.getShape(bi), &.{ 10240, 5 })) return null;
+     if (mlx.mlx_array_dtype(x) != .bfloat16 or mlx.mlx_array_dtype(normalized) != .bfloat16 or mlx.mlx_array_dtype(w) != .uint32 or mlx.mlx_array_dtype(sc) != .bfloat16 or mlx.mlx_array_dtype(bi) != .bfloat16) return null;
+     var dq = mlx.mlx_array_new();
+@@ -44,6 +44,18 @@
+     var flat_x = mlx.mlx_array_new();
+     defer _ = mlx.mlx_array_free(flat_x);
+     try mlx.check(mlx.mlx_reshape(&flat_x, x, &.{ rows, 320 }, 2, s));
++    const padded_rows = @divTrunc(rows + 63, 64) * 64;
++    if (padded_rows != rows) {
++        var zero = mlx.mlx_array_new();
++        defer _ = mlx.mlx_array_free(zero);
++        try mlx.check(mlx.mlx_zeros(&zero, &.{ padded_rows - rows, 320 }, 2, .bfloat16, s));
++        const parts = mlx.mlx_vector_array_new_data(&.{ flat_x, zero }, 2);
++        defer _ = mlx.mlx_vector_array_free(parts);
++        var padded = mlx.mlx_array_new();
++        try mlx.check(mlx.mlx_concatenate_axis(&padded, parts, 0, s));
++        _ = mlx.mlx_array_free(flat_x);
++        flat_x = padded;
++    }
+     var flat_n = mlx.mlx_array_new();
+     defer _ = mlx.mlx_array_free(flat_n);
+     try mlx.check(mlx.mlx_reshape(&flat_n, normalized, &.{ rows, 4, 2560 }, 3, s));
+@@ -60,7 +72,7 @@
+     const cfg = mlx.mlx_fast_metal_kernel_config_new();
+     defer _ = mlx.mlx_fast_metal_kernel_config_free(cfg);
+     try mlx.check(mlx.mlx_fast_metal_kernel_config_add_output_arg(cfg, &.{ ns[0], ns[1], 2560 }, 3, .bfloat16));
+-    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(cfg, 160 * 32, @divTrunc(rows, 64) * 4, 1));
++    try mlx.check(mlx.mlx_fast_metal_kernel_config_set_grid(cfg, 160 * 32, @divTrunc(padded_rows, 64) * 4, 1));
+     try mlx.check(mlx.mlx_fast_metal_kernel_config_set_thread_group(cfg, 32, 4, 1));
+     try mlx.check(mlx.mlx_fast_metal_kernel_config_add_template_arg_dtype(cfg, "T", .bfloat16));
+     const inputs = mlx.mlx_vector_array_new_data(&.{ flat_x, flat_w, flat_n, try sigmoidTable(s) }, 4);
+@@ -88,7 +100,7 @@
+ }
+ 
+ fn geometry(batch: c_int, seq: c_int) bool {
+-    return batch >= 1 and batch <= 2 and seq > 16 and seq <= @import("qwen4_prefill_limits.zig").max_seq;
++    return batch >= 1 and batch <= 2 and seq > 16 and seq <= @import("qwen4_prefill_limits.zig").sequenceLimit(batch);
+ }
+ 
+ pub const Pending = struct { out: mlx.mlx_array, inj: mlx.mlx_array };
+--- a/src/kernels/hc_prefill_upmix.metal
++++ b/src/kernels/hc_prefill_upmix.metal
+@@ -21,6 +21,7 @@
+ for(int i=0;i<32;i+=4) {
+   auto index=total.get_multidimensional_index(i);
+   const int col=(n0+index[0])/4,row=m0+index[1];
++  if(row>=normed_shape[0])continue;
+   T value=T(0);
+   _Pragma("clang loop unroll(full)")
+   for(int h=0;h<4;h++) {
+--- a/src/moe_prefill.zig
++++ b/src/moe_prefill.zig
+@@ -85,7 +85,7 @@
+ }
+ 
+ pub fn liveProbe(tokens: c_int) ?u32 {
+-    if (tokens < 2048 or tokens > 8192 or live_calls >= 4) return null;
++    if (tokens < 2048 or tokens > @import("qwen4_prefill_limits.zig").chunkLimit() or live_calls >= 4) return null;
+     const raw = std.c.getenv("QWEN4_MOE_LIVE_AB") orelse return null;
+     if (raw[0] != '1') return null;
+     const call = live_calls;
+@@ -171,7 +171,7 @@
+ }
+ pub fn group(s: mlx.mlx_stream, indices: mlx.mlx_array) !Group {
+     const n: c_int = @intCast(mlx.mlx_array_size(indices));
+-    if (n <= 0 or n > 8192 * 10 or mlx.getShape(indices).len != 1) return error.UnsupportedMoeGroup;
++    if (n <= 0 or n > @import("qwen4_prefill_limits.zig").chunkLimit() * 10 or mlx.getShape(indices).len != 1) return error.UnsupportedMoeGroup;
+     var ids = mlx.mlx_array_new();
+     defer _ = mlx.mlx_array_free(ids);
+     try mlx.check(mlx.mlx_astype(&ids, indices, .uint32, s));
+--- a/src/ple_packed.zig
++++ b/src/ple_packed.zig
+@@ -11,7 +11,7 @@
+         const raw = std.c.getenv("MLX_SERVE_PLE_PACKED") orelse break :blk false;
+         break :blk raw[0] == '1';
+     };
+-    return on and !mlx.noGpuBackend() and !deferred and n >= 64 and n <= 8192 and supported(table);
++    return on and !mlx.noGpuBackend() and !deferred and n >= 64 and n <= @as(usize, @intCast(@import("qwen4_prefill_limits.zig").chunkLimit())) and supported(table);
+ }
+ fn supported(t: *const qwen.NgramTable) bool {
+     return t.rows <= std.math.maxInt(u32) and t.bits == 4 and t.group_size == 32 and t.dim == 160 and t.wcols == 20 and t.scols == 5;
+@@ -46,7 +46,7 @@
+     }
+ };
+ fn packCached(a: std.mem.Allocator, table: *const qwen.NgramTable, rows: []const i64, cache: ?*RowCache) !Packed {
+-    if (!supported(table) or rows.len == 0 or rows.len > 8192 * qwen.MAX_HEADS) return error.UnsupportedPlePacked;
++    if (!supported(table) or rows.len == 0 or rows.len > @as(usize, @intCast(@import("qwen4_prefill_limits.zig").chunkLimit())) * qwen.MAX_HEADS) return error.UnsupportedPlePacked;
+     const data = try a.alloc(u8, rows.len * 100);
+     errdefer a.free(data);
+     const slots = try a.alloc(u32, rows.len);
+@@ -168,7 +168,7 @@
+         if (!supported(table) or ends.len == 0 or rows.len > 131072 * qwen.MAX_HEADS) return error.UnsupportedPleAhead;
+         var from: usize = 0;
+         for (ends) |end| {
+-            if (end <= from or end > rows.len or end - from > 8192 * qwen.MAX_HEADS) return error.UnsupportedPleAhead;
++            if (end <= from or end > rows.len or end - from > @as(usize, @intCast(@import("qwen4_prefill_limits.zig").chunkLimit())) * qwen.MAX_HEADS) return error.UnsupportedPleAhead;
+             from = end;
+         }
+         if (from != rows.len) return error.UnsupportedPleAhead;
+--- a/src/qsa_pair.zig
++++ b/src/qsa_pair.zig
+@@ -17,7 +17,7 @@
+ }
+ 
+ pub fn supports(batch: c_int, seq: c_int, kv: c_int, ratio: c_int, kb: c_int) bool {
+-    return ratio == 4 and kb > 0 and kb <= 512 and seq >= 16 and seq <= @import("qwen4_prefill_limits.zig").max_seq and
++    return ratio == 4 and kb > 0 and kb <= 512 and seq >= 16 and seq <= @import("qwen4_prefill_limits.zig").sequenceLimit(batch) and
+         batch >= 1 and batch <= 2 and kv >= seq and kv <= MAX_KV;
+ }
+ 
+--- a/src/qwen4_prefill_limits.zig
++++ b/src/qwen4_prefill_limits.zig
+@@ -3,3 +3,14 @@
+ //! regression ties this bound to nextChunkEnd and TAIL_MERGE_MAX.
+ pub const tail_slack: c_int = 511;
+ pub const max_seq: c_int = 8192 + tail_slack;
++
++pub fn wideEnabled() bool {
++    const raw = @import("std").c.getenv("MLX_SERVE_QWEN_WIDE_PREFILL") orelse return false;
++    return raw[0] == '1';
++}
++pub fn chunkLimit() c_int {
++    return if (wideEnabled()) 32768 else 8192;
++}
++pub fn sequenceLimit(batch: c_int) c_int {
++    return if (batch == 1) chunkLimit() + tail_slack else max_seq;
++}
+--- a/src/transformer.zig
++++ b/src/transformer.zig
+@@ -6283,7 +6283,7 @@
+     // Bill the largest tail-coalesced chunk, including an earlier eligible chunk
+     // when the final KV exceeds the cap.
+     const planner = if (pair.enabled() and ratio == 4 and fwd >= 16)
+-        pair.plannerBytes(1, @min(fwd + @import("qwen4_prefill_limits.zig").tail_slack, @import("qwen4_prefill_limits.zig").max_seq), @min(nb, 512))
++        pair.plannerBytes(1, @min(fwd + @import("qwen4_prefill_limits.zig").tail_slack, @as(u64, @intCast(@import("qwen4_prefill_limits.zig").sequenceLimit(1)))), @min(nb, 512))
+     else
+         0;
+     const fused = qsaScoreFusedActiveFor(1, @intCast(n_idx), @intCast(idx_hd));
+@@ -18822,7 +18822,7 @@
+         });
+ 
+         const eval_cadence = prefillEvalCadence(
+-            PREFILL_EVAL_CADENCE_DEFAULT,
++            if (@import("qwen4_prefill_limits.zig").wideEnabled() and seq_len > 8192) 1 else PREFILL_EVAL_CADENCE_DEFAULT,
+             cfg.head_dim,
+             cfg.num_attention_heads,
+             cfg.num_key_value_heads,
+@@ -24290,7 +24290,7 @@
+ 
+             const mg = @import("moe_prefill.zig");
+             if (cfg.isQwen4() and B == 1) try mg.captureRoutes(self.allocator, flat_inds, S);
+-            const grouped = if ((group_override orelse mg.enabled()) and cfg.isQwen4() and B == 1 and S >= 2048 and S <= 8192 and D == 2560 and K == 10 and cfg.num_experts == 512 and !has_expert_bias and mlx.mlx_array_dtype(expert_x) == .bfloat16 and mlx.mlx_array_dtype(norm_scores) == .bfloat16 and gate_qp.bits == 4 and up_qp.bits == 4 and down_qp.bits == 4 and gate_qp.mode == .affine and up_qp.mode == .affine and down_qp.mode == .affine)
++            const grouped = if ((group_override orelse mg.enabled()) and cfg.isQwen4() and B == 1 and S >= 2048 and S <= @import("qwen4_prefill_limits.zig").chunkLimit() and D == 2560 and K == 10 and cfg.num_experts == 512 and !has_expert_bias and mlx.mlx_array_dtype(expert_x) == .bfloat16 and mlx.mlx_array_dtype(norm_scores) == .bfloat16 and gate_qp.bits == 4 and up_qp.bits == 4 and down_qp.bits == 4 and gate_qp.mode == .affine and up_qp.mode == .affine and down_qp.mode == .affine)
+                 try mg.group(self.s, flat_inds)
+             else
+                 null;
+@@ -28685,7 +28685,7 @@
+ var gdn_prefill_engaged = false;
+ 
+ fn gdnPrefillFusedFor(seq: c_int, batch: c_int) bool {
+-    if (seq < 17 or batch < 1 or batch > 2 or seq > @divTrunc(@import("qwen4_prefill_limits.zig").max_seq, batch)) return false;
++    if (seq < 17 or batch < 1 or batch > 2 or seq > @divTrunc(@import("qwen4_prefill_limits.zig").sequenceLimit(batch), batch)) return false;
+     if (gdn_prefill_fused_override) |on| return on;
+     const raw = std.c.getenv("MLX_SERVE_GDN_PREFILL_FUSED") orelse return true;
+     return !std.mem.eql(u8, std.mem.span(raw), "0");
+@@ -43070,7 +43070,7 @@
+     }
+ }
+ 
+-test "hc upmix: native dequant GEMM and compiled mix parity with tail fallback" {
++test "hc upmix: native dequant GEMM and compiled mix parity with padded tails and shape rejection" {
+     if (mlx.noGpuBackend() or !verifyQmmNaxAvailable()) return error.SkipZigTest;
+     const hp = @import("hc_prefill.zig");
+     const s = mlx.gpuStream();
+@@ -43083,9 +43083,9 @@
+     };
+     var prng = std.Random.DefaultPrng.init(0x829571);
+     const rnd = prng.random();
+-    const x = try attn256RandBf16(rnd, &.{ 1, 2048, 320 }, s);
++    const x = try attn256RandBf16(rnd, &.{ 1, 2049, 320 }, s);
+     defer _ = mlx.mlx_array_free(x);
+-    const normed = try attn256RandBf16(rnd, &.{ 1, 2048, 4, 2560 }, s);
++    const normed = try attn256RandBf16(rnd, &.{ 1, 2049, 4, 2560 }, s);
+     defer _ = mlx.mlx_array_free(normed);
+     const w = try attn256RandBf16(rnd, &.{ 10240, 320 }, s);
+     defer _ = mlx.mlx_array_free(w);
+@@ -43101,15 +43101,15 @@
+     defer _ = mlx.mlx_array_free(up);
+     var up4 = mlx.mlx_array_new();
+     defer _ = mlx.mlx_array_free(up4);
+-    try mlx.check(mlx.mlx_reshape(&up4, up, &.{ 1, 2048, 4, 2560 }, 4, s));
++    try mlx.check(mlx.mlx_reshape(&up4, up, &.{ 1, 2049, 4, 2560 }, 4, s));
+     const expected = (try Transformer.applyClosure(xfm.compiled_hc_mix, &.{ up4, normed })) orelse return error.MissingCompiledHc;
+     defer _ = mlx.mlx_array_free(expected);
+     const got = (try hp.upMix(s, x, bank[0], bank[1], bank[2], normed)) orelse return error.HcUpmixDeclined;
+     defer _ = mlx.mlx_array_free(got);
+     try mlx.check(mlx.mlx_array_eval(got));
+     try mlx.check(mlx.mlx_array_eval(expected));
+-    try testing.expectEqualSlices(u16, mlx.mlx_array_data_bfloat16(expected).?[0 .. 2048 * 2560], mlx.mlx_array_data_bfloat16(got).?[0 .. 2048 * 2560]);
+-    const tail = try attn256RandBf16(rnd, &.{ 1, 2049, 4, 2560 }, s);
++    try testing.expectEqualSlices(u16, mlx.mlx_array_data_bfloat16(expected).?[0 .. 2049 * 2560], mlx.mlx_array_data_bfloat16(got).?[0 .. 2049 * 2560]);
++    const tail = try attn256RandBf16(rnd, &.{ 1, 2050, 4, 2560 }, s);
+     defer _ = mlx.mlx_array_free(tail);
+     try testing.expect((try hp.upMix(s, x, bank[0], bank[1], bank[2], tail)) == null);
+ }

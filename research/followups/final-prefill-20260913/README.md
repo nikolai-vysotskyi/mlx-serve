@@ -1,0 +1,1 @@
+Final raw evidence. JSON request logs contain only the synthetic public-source recall workload. GPU files retain timestamps, frequency, power, temperatures and fans. No model arrays or raw routing fixtures are distributed. The wide32 patch is rejected and is not in the runtime. See ../20260913-final-prefill.md.

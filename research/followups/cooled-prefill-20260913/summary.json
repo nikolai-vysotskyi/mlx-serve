@@ -1,0 +1,262 @@
+{
+  "cooled-combined": {
+    "binary_sha256": "cc7f4574620557b263212e009c7e933783a3e0fac4a00ff778d708467de59d48",
+    "rows": [
+      {
+        "request": 0,
+        "arm": 0,
+        "warmup": true,
+        "tokens": 13515,
+        "prefill_tps": 2158.1,
+        "decode_tps": 54.0,
+        "start_gpu_c": 43.62928009033203,
+        "start_fans": [
+          {
+            "max_rpm": 5349,
+            "name": "fan0",
+            "rpm": 0
+          },
+          {
+            "max_rpm": 5777,
+            "name": "fan1",
+            "rpm": 0
+          }
+        ],
+        "cooldown_s": 4.062394791995757,
+        "interior_mean_gpu_mhz": 1609.25,
+        "interior_peak_gpu_c": 66.76822662353516,
+        "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe"
+      },
+      {
+        "request": 1,
+        "arm": 7,
+        "warmup": true,
+        "tokens": 13515,
+        "prefill_tps": 2292.5,
+        "decode_tps": 54.1,
+        "start_gpu_c": 49.175594329833984,
+        "start_fans": [
+          {
+            "max_rpm": 5349,
+            "name": "fan0",
+            "rpm": 0
+          },
+          {
+            "max_rpm": 5777,
+            "name": "fan1",
+            "rpm": 0
+          }
+        ],
+        "cooldown_s": 23.80052837500989,
+        "interior_mean_gpu_mhz": 1615,
+        "interior_peak_gpu_c": 74.8578872680664,
+        "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe"
+      },
+      {
+        "request": 2,
+        "arm": 0,
+        "warmup": false,
+        "tokens": 13515,
+        "prefill_tps": 2182.1,
+        "decode_tps": 54.1,
+        "start_gpu_c": 49.31993865966797,
+        "start_fans": [
+          {
+            "max_rpm": 5349,
+            "name": "fan0",
+            "rpm": 0
+          },
+          {
+            "max_rpm": 5777,
+            "name": "fan1",
+            "rpm": 0
+          }
+        ],
+        "cooldown_s": 45.15826104200096,
+        "interior_mean_gpu_mhz": 1600.8,
+        "interior_peak_gpu_c": 74.0625,
+        "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe"
+      },
+      {
+        "request": 3,
+        "arm": 7,
+        "warmup": false,
+        "tokens": 13515,
+        "prefill_tps": 2335.6,
+        "decode_tps": 53.8,
+        "start_gpu_c": 49.60193634033203,
+        "start_fans": [
+          {
+            "max_rpm": 5349,
+            "name": "fan0",
+            "rpm": 0
+          },
+          {
+            "max_rpm": 5777,
+            "name": "fan1",
+            "rpm": 0
+          }
+        ],
+        "cooldown_s": 48.1918659160001,
+        "interior_mean_gpu_mhz": 1619.3333333333333,
+        "interior_peak_gpu_c": 73.09542083740234,
+        "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe"
+      },
+      {
+        "request": 4,
+        "arm": 7,
+        "warmup": false,
+        "tokens": 13515,
+        "prefill_tps": 2330.9,
+        "decode_tps": 53.3,
+        "start_gpu_c": 49.2663688659668,
+        "start_fans": [
+          {
+            "max_rpm": 5349,
+            "name": "fan0",
+            "rpm": 1353
+          },
+          {
+            "max_rpm": 5777,
+            "name": "fan1",
+            "rpm": 1460
+          }
+        ],
+        "cooldown_s": 49.656937666004524,
+        "interior_mean_gpu_mhz": 1619.5,
+        "interior_peak_gpu_c": 75.43861389160156,
+        "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe"
+      },
+      {
+        "request": 5,
+        "arm": 0,
+        "warmup": false,
+        "tokens": 13515,
+        "prefill_tps": 2163.5,
+        "decode_tps": 53.2,
+        "start_gpu_c": 49.456844329833984,
+        "start_fans": [
+          {
+            "max_rpm": 5349,
+            "name": "fan0",
+            "rpm": 1350
+          },
+          {
+            "max_rpm": 5777,
+            "name": "fan1",
+            "rpm": 1464
+          }
+        ],
+        "cooldown_s": 37.60967841699312,
+        "interior_mean_gpu_mhz": 1611.25,
+        "interior_peak_gpu_c": 73.22209930419922,
+        "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe"
+      }
+    ]
+  },
+  "cooled-long": {
+    "binary_sha256": "cc7f4574620557b263212e009c7e933783a3e0fac4a00ff778d708467de59d48",
+    "rows": [
+      {
+        "request": 0,
+        "arm": 0,
+        "warmup": true,
+        "tokens": 13515,
+        "prefill_tps": 2091.7,
+        "decode_tps": 52.3,
+        "start_gpu_c": 49.712799072265625,
+        "start_fans": [
+          {
+            "max_rpm": 5349,
+            "name": "fan0",
+            "rpm": 0
+          },
+          {
+            "max_rpm": 5777,
+            "name": "fan1",
+            "rpm": 0
+          }
+        ],
+        "cooldown_s": 18.252795833992423,
+        "interior_mean_gpu_mhz": 1606.75,
+        "interior_peak_gpu_c": 73.1664810180664,
+        "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe"
+      },
+      {
+        "request": 1,
+        "arm": 7,
+        "warmup": true,
+        "tokens": 13515,
+        "prefill_tps": 2318.7,
+        "decode_tps": 54.3,
+        "start_gpu_c": 49.47786331176758,
+        "start_fans": [
+          {
+            "max_rpm": 5349,
+            "name": "fan0",
+            "rpm": 1351
+          },
+          {
+            "max_rpm": 5777,
+            "name": "fan1",
+            "rpm": 1457
+          }
+        ],
+        "cooldown_s": 57.745258291004575,
+        "interior_mean_gpu_mhz": 1619.5,
+        "interior_peak_gpu_c": 75.08407592773438,
+        "prompt_sha256": "9401ef298feb42d286798f972c6997e545181ab7ce34bf48a19b63a19f718abe"
+      },
+      {
+        "request": 2,
+        "arm": 0,
+        "warmup": false,
+        "tokens": 64947,
+        "prefill_tps": 2173.8,
+        "decode_tps": 50.0,
+        "start_gpu_c": 49.7155876159668,
+        "start_fans": [
+          {
+            "max_rpm": 5349,
+            "name": "fan0",
+            "rpm": 1346
+          },
+          {
+            "max_rpm": 5777,
+            "name": "fan1",
+            "rpm": 1463
+          }
+        ],
+        "cooldown_s": 48.644415207993006,
+        "interior_mean_gpu_mhz": 1482.037037037037,
+        "interior_peak_gpu_c": 96.60826110839844,
+        "prompt_sha256": "d6927da48d558a30339f665d0536288a7e07394c5f0c4daa23eb7e4246d0037e"
+      },
+      {
+        "request": 3,
+        "arm": 7,
+        "warmup": false,
+        "tokens": 64947,
+        "prefill_tps": 2347.1,
+        "decode_tps": 51.1,
+        "start_gpu_c": 47.74702453613281,
+        "start_fans": [
+          {
+            "max_rpm": 5349,
+            "name": "fan0",
+            "rpm": 1460
+          },
+          {
+            "max_rpm": 5777,
+            "name": "fan1",
+            "rpm": 1584
+          }
+        ],
+        "cooldown_s": 94.58858858399617,
+        "interior_mean_gpu_mhz": 1490.76,
+        "interior_peak_gpu_c": 96.57905578613281,
+        "prompt_sha256": "d6927da48d558a30339f665d0536288a7e07394c5f0c4daa23eb7e4246d0037e"
+      }
+    ]
+  }
+}

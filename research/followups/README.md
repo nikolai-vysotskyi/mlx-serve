@@ -1,3 +1,5 @@
+Current final status: [approximately2300 tok/s at65K, consolidated PR#408, all results and hypothesis dispositions](20260913-final-prefill.md). The entries below are historical snapshots; their then-current defaults and next steps are superseded by the final report.
+
 # Follow-up hypotheses on M5 Max, 2026-09-12
 
 Latest: [zero-copy GPU PLE](20260912-ple-gpu.md) achieved a ~36× warm standalone component ratio but **regressed the actual model** (1987.7 → 1075.6 tok/s at 15,715 tokens). The opt-in integration was removed; its patch and complete outcome are archived. Next investigate bounded selected-row caching/overlap, not whole-table GPU registration.
