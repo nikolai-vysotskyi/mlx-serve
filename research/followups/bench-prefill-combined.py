@@ -4,12 +4,12 @@ from pathlib import Path
 parser=argparse.ArgumentParser()
 parser.add_argument('--binary',type=Path,default=Path('zig-out/bin/mlx-serve'))
 parser.add_argument('--trace',action='store_true',help='diagnostic Metal System Trace; rates then include tracing overhead')
-parser.add_argument('--sequence',help='same-process arms, one digit per identical request: 0=current, 1=group, 2=PLE ahead, 3=combined')
+parser.add_argument('--sequence',help='same-process arms: bit1=group, bit2=PLE ahead, bit4=HC upmix; 0=current, 7=all')
 parser.add_argument('--monitor',type=Path,help='optional local macmon executable; read-only 1-second telemetry')
 parser.add_argument('--out',type=Path,required=True)
 parser.add_argument('--lock',type=Path,required=True,help='exclusive GPU lock implementing acquire/release OWNER')
 args=parser.parse_args()
-if args.sequence and (not set(args.sequence)<=set('0123') or args.trace):parser.error('sequence accepts only 0..3 and cannot use trace')
+if args.sequence and (not set(args.sequence)<=set('01234567') or args.trace):parser.error('sequence accepts only 0..7 and cannot use trace')
 P=Path(__file__).resolve().parents[2]
 W=args.out.resolve();W.mkdir(parents=True,exist_ok=True)
 BIN=args.binary.resolve()
@@ -22,7 +22,7 @@ def listening():
 TAG=os.environ.get('PLE_BENCH_TAG','combined-cadence')
 corpus='\n'.join((P/'src/transformer.zig').read_text().splitlines()[100:900])
 records=[]
-diagnostic=args.trace or os.environ.get('PREFILL_CAPTURE_ROUTES')=='1' or os.environ.get('PREFILL_MOE_LIVE_AB')=='1'
+diagnostic=args.trace or os.environ.get('PREFILL_CAPTURE_ROUTES')=='1' or os.environ.get('PREFILL_MOE_LIVE_AB')=='1' or os.environ.get('PREFILL_HC_UPMIX_VERIFY')=='1'
 if args.sequence and diagnostic:parser.error('sequence must not add route capture or layer replay synchronization')
 meta={'kind':('diagnostic; synchronization/trace overhead included' if diagnostic else 'HTTP matched screening; not llmprobe'),'binary_sha256':hashlib.sha256(BIN.read_bytes()).hexdigest(),'power':subprocess.check_output(['pmset','-g','batt'],text=True),'corpus_sha256':hashlib.sha256(corpus.encode()).hexdigest(),'records':records}
 meta['sequence']=args.sequence
@@ -46,6 +46,8 @@ try:
   env={k:v for k,v in os.environ.items() if not k.startswith(('MLX_SERVE_','QWEN4_'))};env.update(DYLD_LIBRARY_PATH=str(P/'lib/mlx/lib')+':'+str(P/'lib/llama/lib'),MLX_SERVE_PREFILL_CHUNK='8192',MLX_SERVE_PREFILL_TRACE='1',MLX_SERVE_QSA_PAIR=str(int(fused)),MLX_SERVE_HC_PREFILL=str(int(fused)),MLX_SERVE_GDN_PREFILL_FUSED=str(int(fused)),MLX_SERVE_PLE_PACKED=str(int(packed)),MLX_SERVE_PLE_AHEAD=str(int(name in ('ahead','combined'))),MLX_SERVE_PLE_TIMING='1',MLX_SERVE_MOE_PREFILL_GROUP=str(int(name in ('combined','group'))),QWEN4_PREFILL_CADENCE_TIMING='1')
   if os.environ.get('PREFILL_CAPTURE_ROUTES')=='1':env['QWEN4_MOE_CAPTURE_PATH']=str(W/'routes')
   if os.environ.get('PREFILL_MOE_LIVE_AB')=='1':env['QWEN4_MOE_LIVE_AB']='1'
+  if os.environ.get('PREFILL_HC_UPMIX')=='1':env['MLX_SERVE_HC_UPMIX']='1'
+  if os.environ.get('PREFILL_HC_UPMIX_VERIFY')=='1':env['QWEN4_HC_UPMIX_VERIFY']='1'
   if args.sequence:env['QWEN4_PREFILL_ARM_SEQUENCE']=args.sequence
   env.pop('QWEN4_PROFILE_FWD',None)
   if os.environ.get('PLE_BENCH_CPU_TIMING')=='1':env['QWEN4_PROFILE_FWD']='1'
@@ -94,7 +96,9 @@ try:
      assert usage.get('prompt_tokens_details',{}).get('cached_tokens',0)==0,usage
      assert 'MAGNOLIA-7731' in answer,response
     text=logpath.read_text()
-    assert ('[ple-packed] engaged:' in text)==(any(c in args.sequence for c in '23') if args.sequence else packed)
+    assert ('[ple-packed] engaged:' in text)==(any(int(c)&2 for c in args.sequence) if args.sequence else packed)
+    if os.environ.get('PREFILL_HC_UPMIX')=='1' or (args.sequence and any(int(c)&4 for c in args.sequence)):assert '[hc-upmix] engaged:' in text
+    if os.environ.get('PREFILL_HC_UPMIX_VERIFY')=='1':assert text.count('[hc-upmix-verify]')==2 and 'different=0' in text
     if name in ('ahead','combined'):assert '[ple-ahead] chunks=' in text and 'chunks=0/' not in text,text[-4000:]
     if name in ('combined','group'):assert '[moe-prefill-group] engaged:' in text
     if fused:assert '[qsa-pair] engaged:' in text and '[hc-prefill] engaged:' in text and '[gdn-prefill] engaged:' in text

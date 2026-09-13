@@ -10,9 +10,9 @@ pub fn begin(tokens: usize) void {
     const raw = std.c.getenv("QWEN4_PREFILL_ARM_SEQUENCE") orelse return;
     const sequence = std.mem.sliceTo(raw, 0);
     if (cursor >= sequence.len) return;
-    for (sequence) |c| if (c < '0' or c > '3') return;
+    for (sequence) |c| if (c < '0' or c > '7') return;
     arm = sequence[cursor] - '0';
-    log.info("[prefill-experiment] request={d} arm={d} group={} ple={} same_process=true\n", .{ cursor, arm.?, arm.? & 1 != 0, arm.? & 2 != 0 });
+    log.info("[prefill-experiment] request={d} arm={d} group={} ple={} hc_upmix={} same_process=true\n", .{ cursor, arm.?, arm.? & 1 != 0, arm.? & 2 != 0, arm.? & 4 != 0 });
     cursor += 1;
 }
 
@@ -21,4 +21,8 @@ pub fn group() ?bool {
 }
 pub fn ple() ?bool {
     return if (arm) |v| v & 2 != 0 else null;
+}
+
+pub fn hcUpmix() ?bool {
+    return if (arm) |v| v & 4 != 0 else null;
 }

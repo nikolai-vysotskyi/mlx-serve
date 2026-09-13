@@ -1,0 +1,26 @@
+{
+  "source_parent": "fad31825080520c5e8440f40e2072bd31060d0d6",
+  "binary_sha256": "cc7f4574620557b263212e009c7e933783a3e0fac4a00ff778d708467de59d48",
+  "source_sha256": {
+    "src/hc_prefill.zig": "510a2e3160dfcab322556f8836389683e982c9269964cceefad7d4f4a95b4dba",
+    "src/kernels/hc_prefill_upmix.metal": "538a73ce2a4ef7c17bc7c441d009954b2541c41814c9e9c7d2ddac96a595b2c2",
+    "src/transformer.zig": "ce3486932ccd550076fa5b31efb7fb3440d7c8f5ea2797b5e4200df630907bbd",
+    "src/prefill_experiment.zig": "970231271f6305f1f327ed66ebacd41174e787f1ab51b85597bfa211310847d4",
+    "research/followups/hc-upmix-probe.cpp": "026ee0e3586e1cff4cd442759c8e5997c3758856bd7b2ac78d16dfeffb8cdf5f",
+    "research/followups/bench-prefill-combined.py": "3078a527ec8f9893860217c1878a46cebde97364ad19d0ab8e531ded06475d1f"
+  },
+  "release_fast": "7/7 build steps passed",
+  "focused_test": "3/3 passed, including hc upmix native dequant GEMM / compiled mix parity and tail fallback",
+  "full_suite_rerun": false,
+  "live_verify": {
+    "tokens": 13515,
+    "per_comparison_elements": 20971520,
+    "comparisons": 2,
+    "different_elements": 0,
+    "cached_tokens": 0,
+    "answer": "MAGNOLIA-7731",
+    "synchronization_added": true
+  },
+  "new_full_model_speedup_claim": false,
+  "cooling_settings_changed": false
+}

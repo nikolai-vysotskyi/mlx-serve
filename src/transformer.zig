@@ -17008,19 +17008,9 @@ pub const Transformer = struct {
         return self.hcReadNormed(n4, w, batch, seq_len, null);
     }
 
-    fn hcReadNormed(self: *Transformer, n4: mlx.mlx_array, w: *const HcWeights, batch: c_int, seq_len: c_int, raw_inject: ?mlx.mlx_array) !HcRead {
+    fn hcProjectAndMix(self: *Transformer, act: mlx.mlx_array, w: *const HcWeights, n4: mlx.mlx_array, batch: c_int, seq_len: c_int) !mlx.mlx_array {
         const hc: c_int = @intCast(self.config.hc_count);
         const hidden: c_int = @intCast(self.config.hidden_size);
-        const flat_shape = [_]c_int{ batch, seq_len, hc * hidden };
-        var n_flat = mlx.mlx_array_new();
-        defer _ = mlx.mlx_array_free(n_flat);
-        try mlx.check(mlx.mlx_reshape(&n_flat, n4, &flat_shape, 3, self.s));
-
-        // down/inject carry the reference's `/hc` in their weights (load-time fold).
-        const down = try self.qmatmul(n_flat, w.down_w, w.down_s, w.down_b);
-        defer _ = mlx.mlx_array_free(down);
-        const act = (try applyClosure(self.compiled_hc_silu, &.{down})) orelse try self.silu(down);
-        defer _ = mlx.mlx_array_free(act);
         const up = try self.qmatmul(act, w.up_w, w.up_s, w.up_b);
         defer _ = mlx.mlx_array_free(up);
         const shape4 = [_]c_int{ batch, seq_len, hc, hidden };
@@ -17043,7 +17033,43 @@ pub const Transformer = struct {
             mixed = mlx.mlx_array_new();
             try mlx.check(mlx.mlx_mean_axis(&mixed, prod, 2, false, self.s));
         }
+        return mixed;
+    }
+
+    fn hcReadNormed(self: *Transformer, n4: mlx.mlx_array, w: *const HcWeights, batch: c_int, seq_len: c_int, raw_inject: ?mlx.mlx_array) !HcRead {
+        const hc: c_int = @intCast(self.config.hc_count);
+        const hidden: c_int = @intCast(self.config.hidden_size);
+        const flat_shape = [_]c_int{ batch, seq_len, hc * hidden };
+        var n_flat = mlx.mlx_array_new();
+        defer _ = mlx.mlx_array_free(n_flat);
+        try mlx.check(mlx.mlx_reshape(&n_flat, n4, &flat_shape, 3, self.s));
+
+        // down/inject carry the reference's `/hc` in their weights (load-time fold).
+        const down = try self.qmatmul(n_flat, w.down_w, w.down_s, w.down_b);
+        defer _ = mlx.mlx_array_free(down);
+        const act = (try applyClosure(self.compiled_hc_silu, &.{down})) orelse try self.silu(down);
+        defer _ = mlx.mlx_array_free(act);
+        const hp = @import("hc_prefill.zig");
+        const fused_mix = if (hp.upmixEnabled() and verifyQmmNaxAvailable()) blk: {
+            const qp = self.quantParamsHinted(w.up_w, w.up_s, 320);
+            if (qp.bits != 8 or qp.group_size != 64 or qp.mode != .affine) break :blk null;
+            break :blk try hp.upMix(self.s, act, w.up_w, w.up_s, w.up_b, n4);
+        } else null;
+        const mixed = fused_mix orelse try self.hcProjectAndMix(act, w, n4, batch, seq_len);
         errdefer _ = mlx.mlx_array_free(mixed);
+        if (fused_mix != null and hp.verifyUpmix()) {
+            const reference = try self.hcProjectAndMix(act, w, n4, batch, seq_len);
+            defer _ = mlx.mlx_array_free(reference);
+            try mlx.check(mlx.mlx_array_eval(mixed));
+            try mlx.check(mlx.mlx_array_eval(reference));
+            const count = mlx.mlx_array_size(reference);
+            const a = mlx.mlx_array_data_bfloat16(mixed).?[0..count];
+            const b = mlx.mlx_array_data_bfloat16(reference).?[0..count];
+            var different: usize = 0;
+            for (a, b) |x, y| different += @intFromBool(x != y);
+            log.info("[hc-upmix-verify] S={d} elements={d} different={d} actual_inputs_weights=true synchronization_added=true\n", .{ seq_len, count, different });
+            if (different != 0) return error.HcUpmixParity;
+        }
 
         var inj = mlx.mlx_array_new();
         if (w.inject_w.ctx != null) {
@@ -43036,6 +43062,50 @@ test "gatherQsa256 NAX: precise sparse attention and stock fallback" {
         defer _ = mlx.mlx_array_free(out);
         try std.testing.expect(try attn256MaxDiff(out, ref, s) < 0.005);
     }
+}
+
+test "hc upmix: native dequant GEMM and compiled mix parity with tail fallback" {
+    if (mlx.noGpuBackend() or !verifyQmmNaxAvailable()) return error.SkipZigTest;
+    const hp = @import("hc_prefill.zig");
+    const s = mlx.gpuStream();
+    var cache = try KVCache.init(testing.allocator, 0);
+    defer cache.deinit();
+    var xfm = std.mem.zeroInit(Transformer, .{ .s = s, .allocator = testing.allocator, .cache = cache });
+    xfm.compileQwen4Hc();
+    defer inline for (.{ xfm.compiled_hc_silu, xfm.compiled_hc_mix, xfm.compiled_hc_inj, xfm.compiled_hc_write }) |slot| {
+        if (slot) |closure| _ = mlx.mlx_closure_free(closure);
+    };
+    var prng = std.Random.DefaultPrng.init(0x829571);
+    const rnd = prng.random();
+    const x = try attn256RandBf16(rnd, &.{ 1, 2048, 320 }, s);
+    defer _ = mlx.mlx_array_free(x);
+    const normed = try attn256RandBf16(rnd, &.{ 1, 2048, 4, 2560 }, s);
+    defer _ = mlx.mlx_array_free(normed);
+    const w = try attn256RandBf16(rnd, &.{ 10240, 320 }, s);
+    defer _ = mlx.mlx_array_free(w);
+    var quant = mlx.mlx_vector_array_new();
+    defer _ = mlx.mlx_vector_array_free(quant);
+    try mlx.check(mlx.mlx_quantize(&quant, w, mlx.mlx_optional_int.some(64), mlx.mlx_optional_int.some(8), "affine", .{ .ctx = null }, s));
+    var bank: [3]mlx.mlx_array = .{ mlx.mlx_array_new(), mlx.mlx_array_new(), mlx.mlx_array_new() };
+    defer for (bank) |a| {
+        _ = mlx.mlx_array_free(a);
+    };
+    for (&bank, 0..) |*a, i| try mlx.check(mlx.mlx_vector_array_get(a, quant, i));
+    const up = try qmatmulBits(x, bank[0], bank[1], bank[2], 8, 64, .affine, s);
+    defer _ = mlx.mlx_array_free(up);
+    var up4 = mlx.mlx_array_new();
+    defer _ = mlx.mlx_array_free(up4);
+    try mlx.check(mlx.mlx_reshape(&up4, up, &.{ 1, 2048, 4, 2560 }, 4, s));
+    const expected = (try Transformer.applyClosure(xfm.compiled_hc_mix, &.{ up4, normed })) orelse return error.MissingCompiledHc;
+    defer _ = mlx.mlx_array_free(expected);
+    const got = (try hp.upMix(s, x, bank[0], bank[1], bank[2], normed)) orelse return error.HcUpmixDeclined;
+    defer _ = mlx.mlx_array_free(got);
+    try mlx.check(mlx.mlx_array_eval(got));
+    try mlx.check(mlx.mlx_array_eval(expected));
+    try testing.expectEqualSlices(u16, mlx.mlx_array_data_bfloat16(expected).?[0 .. 2048 * 2560], mlx.mlx_array_data_bfloat16(got).?[0 .. 2048 * 2560]);
+    const tail = try attn256RandBf16(rnd, &.{ 1, 2049, 4, 2560 }, s);
+    defer _ = mlx.mlx_array_free(tail);
+    try testing.expect((try hp.upMix(s, x, bank[0], bank[1], bank[2], tail)) == null);
 }
 
 test "hc prefill: pending write, normalized streams, native inject reduction and BF16 mix across shapes" {
