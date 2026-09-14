@@ -1,0 +1,15 @@
+--- a/src/generate.zig
++++ b/src/generate.zig
+@@ -2361,7 +2361,11 @@
+             // Defer joins on success, cancellation and every error path.
+             if (xfm.config.isQwen4()) @import("prefill_experiment.zig").begin(prompt_ids.len);
+             ctx.ple_ahead = ahead: {
+-                if (!@import("ple_packed.zig").Ahead.enabled() or width_is_adaptive or has_vision or mtp_active or dflash_active or xfm.compiled_forward != null) break :ahead null;
++                const native_mtp = if (options.mtp) |head| switch (head) {
++                    .qwen4 => |target| target == xfm,
++                    else => false,
++                } else false;
++                if (!@import("ple_packed.zig").Ahead.enabled() or width_is_adaptive or has_vision or (mtp_active and !native_mtp) or dflash_active or xfm.compiled_forward != null) break :ahead null;
+                 var ends: std.ArrayList(usize) = .empty;
+                 defer ends.deinit(allocator);
+                 var boundary: usize = 0;

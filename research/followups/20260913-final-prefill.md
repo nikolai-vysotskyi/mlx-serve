@@ -2,6 +2,8 @@
 
 The local research phase is complete. **PR [#408](https://github.com/ddalcu/mlx-serve/pull/408) is the single consolidated review target.** The measured result accepted for this phase is approximately **2300 tok/s at 64,947 input tokens**. It is an HTTP screening result, not a claim of sustained serving throughput or a >1.5× improvement over current upstream.
 
+See the [September14 reviewer follow-up](20260914-review-and-compatibility.md) for independent measurements and the correction to the manual width pin. Historical measurements below retain their original provenance.
+
 ## Results and provenance
 
 All new model measurements use `ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit`, M5 Max 128 GB, macOS 26.5, AC power, chunk8192, ctx131072, prefix-cache entries0, KV quantization off, MTP/PLD/drafter off. The request is public repository source plus a fixed passphrase, greedy seed1234, max_tokens32; the measured responses actually contain 10 output tokens. Every listed long request has cached_tokens=0 and recalls MAGNOLIA-7731. No model conversion, requantization, layer removal or changed routing selection was used.
@@ -153,7 +155,7 @@ PLE_BENCH_LONG=1 PLE_BENCH_TAG=cooled-long \
 
 Run from repository root. Sequence0 keeps QSA+HC+GDN;7 adds group+PLEahead+HCupmix;f adds optional MoEMPP. The first two long-mode requests are13.5K warmups. Same-process arm selection is a research control, not a user-facing serving feature. The current driver supportsf; the original087c210 driver did not yet have all cooldown options, so use the published final driver with the explicitly selected binary/source corpus.
 
-For manual serving of the2347 feature combination, set `MLX_SERVE_QSA_PAIR=1 MLX_SERVE_HC_PREFILL=1 MLX_SERVE_GDN_PREFILL_FUSED=1 MLX_SERVE_PLE_PACKED=1 MLX_SERVE_PLE_AHEAD=1 MLX_SERVE_MOE_PREFILL_GROUP=1 MLX_SERVE_HC_UPMIX=1 MLX_SERVE_MOE_PREFILL_MPP=0`, use `--prefill-chunk 8192 --ctx-size 131072 --prefix-cache-entries 0 --kv-quant off --no-mtp --no-pld --no-drafter`, and the exact mixed-pack model. Leave all replay/capture/sequence env unset for ordinary serving. Verify engagement, actual token count, cached_tokens, prompt hash and binary hash from logs rather than assuming launch flags prove a path ran.
+For manual serving of the2347 feature combination, set `MLX_SERVE_PREFILL_CHUNK=8192 MLX_SERVE_QSA_PAIR=1 MLX_SERVE_HC_PREFILL=1 MLX_SERVE_GDN_PREFILL_FUSED=1 MLX_SERVE_PLE_PACKED=1 MLX_SERVE_PLE_AHEAD=1 MLX_SERVE_MOE_PREFILL_GROUP=1 MLX_SERVE_HC_UPMIX=1 MLX_SERVE_MOE_PREFILL_MPP=0`, use `--prefill-chunk 8192 --ctx-size 131072 --prefix-cache-entries 0 --kv-quant off --no-mtp --no-pld --no-drafter`, and the exact mixed-pack model. Leave all replay/capture/sequence env unset for ordinary serving. Verify engagement, actual token count, cached_tokens, prompt hash and binary hash from logs rather than assuming launch flags prove a path ran.
 
 For the maintainer's acceptance run use `tests/bench_qwen4_prefill.py`/`tests/bench.sh` and the full named OFF/ON llmprobe ladder; its existing core-arm driver must explicitly configure the new levers before treating it as a combined-bundle comparison. Save both prefill and decode, model/tokenizer and binary hashes, launch env/flags, engagement, real token counts, warmup policy, AC/thermal state and allocator peaks. A failure to meet cooldown or load readiness is an incomplete arm, not zero tok/s. Do not retry heavy tests for a weak component hypothesis.
 

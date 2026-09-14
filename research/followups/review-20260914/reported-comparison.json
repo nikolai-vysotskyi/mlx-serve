@@ -1,0 +1,33 @@
+{
+  "source": "https://github.com/ddalcu/mlx-serve/pull/408#issuecomment-5658856761",
+  "reporter": "beamivalice",
+  "pr_commit": "9644a6b",
+  "control_commit": "not supplied",
+  "local_rerun": false,
+  "rows": [
+    {
+      "cell": "2042-token llmprobe",
+      "pr": 1791.0,
+      "control": 1694.0,
+      "reported_gain_pct": 5.726092089728452
+    },
+    {
+      "cell": "16.3K context",
+      "pr": 1858.0,
+      "control": 1761.0,
+      "reported_gain_pct": 5.5082339579784145
+    },
+    {
+      "cell": "64K mean of two reported runs",
+      "pr": 1849.5,
+      "control": 1749.5,
+      "reported_gain_pct": 5.715918833952549
+    },
+    {
+      "cell": "cold 16K",
+      "pr": 1850.0,
+      "control": 1753.0,
+      "reported_gain_pct": 5.53337136337706
+    }
+  ]
+}
