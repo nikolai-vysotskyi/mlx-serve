@@ -1,0 +1,16 @@
+{
+  "pr_head": "e4691282a37dd67456e5f2bf9440f459b165017d",
+  "upstream": "10756309be076f8382674bd61d70d1106e40cb70",
+  "runtime_binary_sha256": "4ff9ca6eef5f0c4ac2f1a059ee6a4cd9258f39ae68c5fd3083986a30ce14fde6",
+  "release_fast": "7/7 passed",
+  "zig_tests": {
+    "passed": 2512,
+    "skipped": 169,
+    "total": 2681,
+    "exit": 0,
+    "max_rss_gb": 12
+  },
+  "new_full_model_measurement": false,
+  "native_mtp_ahead_enabled": false,
+  "remote_ci": "pending"
+}

@@ -70,3 +70,7 @@ Upstream moved from0814cf3 to1075630, including grouped MTP, draft/verify schedu
 - Source anchors: [width policy](https://github.com/nikolai-vysotskyi/mlx-serve/blob/9644a6b/src/generate.zig#L151-L207), [ahead refusal](https://github.com/nikolai-vysotskyi/mlx-serve/blob/9644a6b/src/generate.zig#L2364), [capture/history](https://github.com/nikolai-vysotskyi/mlx-serve/blob/9644a6b/src/generate.zig#L2455-L2515), [head's separate context](https://github.com/nikolai-vysotskyi/mlx-serve/blob/9644a6b/src/transformer.zig#L20980).
 
 No GPU/model benchmark was started for this investigation. The conclusion to defend is a reproducible positive direction with precise conditions; the absolute gap and MTP-compatible PLE gain remain to be established.
+
+### Integration completed after this source review
+
+PR heade4691282a37dd67456e5f2bf9440f459b165017d incorporates upstream10756309be076f8382674bd61d70d1106e40cb70. The conflict resolution preserves upstream grouped PLE ID synchronization and its joined-verifier MoE paths; wide prefill grouping remains outside skip-shared verification. ReleaseFast7/7 and2512 Zig tests passed/169 skipped (12GB max RSS). [Build, tests and exact integration manifest](review-20260914/). No full-model speed is assigned to this head, and the native-MTP-ahead proposal remains unintegrated.
