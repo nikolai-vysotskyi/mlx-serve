@@ -1,0 +1,56 @@
+{
+  "source_commit": "087c2109e17bcd97cfa4776b35fd8c49a0491b6c",
+  "binary_sha256": "cc7f4574620557b263212e009c7e933783a3e0fac4a00ff778d708467de59d48",
+  "libmlx_sha256": "c63811e0fe9afb5463f60137b6db913da0de73634cc736c8e06771a62b1db477",
+  "mlx_runtime_version": "0.32.2",
+  "mlx_source_commit": "1f8e74e3f12f31365464a6867c6579f0e9b29d85",
+  "prompt_sha256": "d6927da48d558a30339f665d0536288a7e07394c5f0c4daa23eb7e4246d0037e",
+  "corpus_sha256": "1b0d4f22b5f08c471a93caac3d5f4729be34c64a04e4c0e303a3fc44bcde36a0",
+  "prompt_utf8_bytes": 194075,
+  "corpus_characters": 36964,
+  "repeated_body_characters": 193500,
+  "known_prompt_tokens": 64947,
+  "known_short_tokens": 13515,
+  "original_measurement": {
+    "control_tps": 2173.8,
+    "candidate_tps": 2347.1,
+    "candidate_http_wall_s": 27.887838958005887,
+    "output_tokens": 10,
+    "cached_tokens": 0
+  },
+  "checkpoint_revision": "not pinned in original request manifest; model alias alone is insufficient to prove identical files",
+  "version_correction": "Earlier narrative incorrectly said MLX0.32.3. Direct runtime version() reports0.32.2 and the dylib SHA matches archived September12 provenance.",
+  "hardware_observed": {
+    "chip": "Apple M5 Max",
+    "cpu_cores": 18,
+    "gpu_cores": 40,
+    "memory_gb": 128,
+    "model_identifier": "Mac17,6"
+  },
+  "original_response_timings": {
+    "prompt_n": 64947,
+    "cached_n": 0,
+    "prompt_ms": 27671.095,
+    "prompt_per_second": 2347.106,
+    "predicted_n": 10,
+    "predicted_ms": 195.671,
+    "predicted_per_second": 51.106,
+    "tokenize_ms": 0.116
+  },
+  "frozen_payloads_verified_against_recorded_prompt_hashes": true,
+  "earlier_same_machine_llmprobe": {
+    "source_commit": "d23d9df",
+    "protocol": "llmprobe0.6.6 contextScaling; core fusions; full ladder",
+    "reported_prefill_tps": 1761,
+    "input_tokens": 65778,
+    "raw_server_prefill_tps": [
+      1752.6,
+      1753.5,
+      1764.4,
+      1787.1,
+      1789.8,
+      1803.3
+    ],
+    "comparison_is_not_isolated": true
+  }
+}

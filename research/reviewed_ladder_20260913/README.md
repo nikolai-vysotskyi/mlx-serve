@@ -1,6 +1,6 @@
 # Current-head PR #408: M5 Max mixed-pack ladder
 
-Measured production commit **d23d9df**, binary SHA256 `580f495dce825202ea2da7976e10f6b1c4db39158827e7d63735f60a79f0d476`. Base fa76a4b; not a benchmark of latest upstream main. Research PLE/grouping changes are disabled. Hardware M5 Max 128 GB, AC power, battery 100%, macOS 26.5, pinned MLX 0.32.3. No other benchmark held the exclusive GPU lock. Power/frequency telemetry was unavailable, so no thermal cause is claimed.
+Measured production commit **d23d9df**, binary SHA256 `580f495dce825202ea2da7976e10f6b1c4db39158827e7d63735f60a79f0d476`. Base fa76a4b; not a benchmark of latest upstream main. Research PLE/grouping changes are disabled. Hardware M5 Max 128 GB, AC power, battery 100%, macOS 26.5, pinned MLX 0.32.2 (version label corrected September14 against the exported runtime version and archived dylib SHA). No other benchmark held the exclusive GPU lock. Power/frequency telemetry was unavailable, so no thermal cause is claimed.
 
 ## Full-model results
 

@@ -1,0 +1,11 @@
+{
+  "runtime_version": "0.32.2",
+  "libmlx_sha256": "c63811e0fe9afb5463f60137b6db913da0de73634cc736c8e06771a62b1db477",
+  "source_pin": "1f8e74e3f12f31365464a6867c6579f0e9b29d85",
+  "stage_stamp": "mlx=1f8e74e3f12f mlxc=56b2d39fc831 target=26.2",
+  "historical_hash_sources": [
+    "20260912-hc-native-provenance.json",
+    "20260912-moe-profile-provenance.json"
+  ],
+  "method": "Exported mlx::core::version() from the exact linked dylib via ctypes; no model loaded."
+}

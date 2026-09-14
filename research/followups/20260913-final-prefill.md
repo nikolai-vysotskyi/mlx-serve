@@ -20,7 +20,7 @@ The 087c210 executable SHA256 is `cc7f4574620557b263212e009c7e933783a3e0fac4a00f
 
 Long-prompt SHA256: `d6927da48d558a30339f665d0536288a7e07394c5f0c4daa23eb7e4246d0037e`; corpus SHA256: `1b0d4f22b5f08c471a93caac3d5f4729be34c64a04e4c0e303a3fc44bcde36a0`. Peak MLX allocations for the matched long pair were78,214,759,746/78,223,208,014 bytes. Full-blast MPP peak was78,216,733,974 bytes. These are MLX allocator observations, not total process/OS memory or a proof of admission safety under pressure.
 
-The measured runtime uses the locally built MLX0.32.3 source `1f8e74e3f12f31365464a6867c6579f0e9b29d85`; the startup string saying0.32.2 is stale and is not the library fingerprint. Do not assume a checkout's submodule label alone identifies its installed dylib. Use isolated build caches per checkout.
+Correction (September14): the measured runtime uses MLX0.32.2 source `1f8e74e3f12f31365464a6867c6579f0e9b29d85`; the earlier0.32.3 label was an error in this report. The exported runtime `version()` returns0.32.2, and dylib SHA256 `c63811e0fe9afb5463f60137b6db913da0de73634cc736c8e06771a62b1db477` matches the September12 records. Do not assume a checkout's submodule label alone identifies its installed dylib. Use isolated build caches per checkout.
 
 ### Earlier llmprobe acceptance-style evidence
 

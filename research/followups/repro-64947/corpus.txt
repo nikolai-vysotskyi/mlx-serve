@@ -1,0 +1,800 @@
+        "\n" ++
+        "auto i_state = state_in + (n * Dv + dv_idx) * Dk;\n" ++
+        "auto o_state = state_out + (n * Dv + dv_idx) * Dk;\n" ++
+        seq_base ++
+        "\n" ++
+        "float state[n_per_t];\n" ++
+        "for (int i = 0; i < n_per_t; ++i) {\n" ++
+        "  auto s_idx = n_per_t * dk_idx + i;\n" ++
+        "  state[i] = static_cast<float>(i_state[s_idx]);\n" ++
+        "}\n" ++
+        "\n" ++
+        g_setup ++ "\n" ++
+        "auto beta_ = beta + b_idx * T * Hv;\n" ++
+        "\n" ++
+        "for (int t = 0; t < T; ++t) {\n" ++
+        "  float kv_mem = 0.0f;\n" ++
+        "  for (int i = 0; i < n_per_t; ++i) {\n" ++
+        "    auto s_idx = n_per_t * dk_idx + i;\n" ++
+        "    state[i] = state[i] * " ++ g_access ++ ";\n" ++
+        "    kv_mem += state[i] * k_[s_idx];\n" ++
+        "  }\n" ++
+        "  kv_mem = simd_sum(kv_mem);\n" ++
+        "\n" ++
+        "  auto delta = (v_[dv_idx] - kv_mem) * beta_[hv_idx];\n" ++
+        "\n" ++
+        "  float out = 0.0f;\n" ++
+        "  for (int i = 0; i < n_per_t; ++i) {\n" ++
+        "    auto s_idx = n_per_t * dk_idx + i;\n" ++
+        "    state[i] = state[i] + k_[s_idx] * delta;\n" ++
+        "    out += state[i] * q_[s_idx];\n" ++
+        "  }\n" ++
+        "  out = simd_sum(out);\n" ++
+        "  if (thread_index_in_simdgroup == 0) {\n" ++
+        "    y[dv_idx] = static_cast<OutT>(out);\n" ++
+        "  }\n" ++
+        seq_write ++
+        "  q_ += Hk * Dk;\n" ++
+        "  k_ += Hk * Dk;\n" ++
+        "  v_ += Hv * Dv;\n" ++
+        "  y += Hv * Dv;\n" ++
+        g_advance ++ "\n" ++
+        "  beta_ += Hv;\n" ++
+        "}\n" ++
+        "for (int i = 0; i < n_per_t; ++i) {\n" ++
+        "  auto s_idx = n_per_t * dk_idx + i;\n" ++
+        "  o_state[s_idx] = static_cast<StT>(state[i]);\n" ++
+        "}\n";
+    return std.fmt.comptimePrint("{s}", .{body});
+}
+
+/// One compiled kernel per (vectorized, capture_seq) pair. Each comptime
+/// instantiation gets its own cache slot; the Metal name must differ per
+/// variant or MLX hands back the wrong compiled function.
+fn getGdnKernelFor(comptime vectorized: bool, comptime capture_seq: bool) !mlx.mlx_fast_metal_kernel {
+    // The two `const`s are load-bearing: a struct declared inside a function
+    // that captures NOTHING from the comptime parameters is memoized to ONE
+    // type across every instantiation, so all four variants would share a
+    // single cache slot and the first kernel compiled would be handed back for
+    // the rest (a seq kernel answering a non-seq call = wrong output count).
+    const Cache = struct {
+        const is_vectorized = vectorized;
+        const is_capture_seq = capture_seq;
+        var kernel: ?mlx.mlx_fast_metal_kernel = null;
+    };
+    if (Cache.kernel) |k| return k;
+    const input_names = if (capture_seq)
+        [_][*:0]const u8{ "q", "k", "v", "g", "beta", "state_in", "T", "seq_stride" }
+    else
+        [_][*:0]const u8{ "q", "k", "v", "g", "beta", "state_in", "T" };
+    const output_names = if (capture_seq)
+        [_][*:0]const u8{ "y", "state_seq", "state_out" }
+    else
+        [_][*:0]const u8{ "y", "state_out" };
+    const name = "gated_delta_step" ++
+        (if (capture_seq) "_seq" else "") ++
+        (if (vectorized) "_vec" else "");
+    const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+    defer _ = mlx.mlx_vector_string_free(in_vec);
+    const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+    defer _ = mlx.mlx_vector_string_free(out_vec);
+    const kernel = mlx.mlx_fast_metal_kernel_new(
+        name,
+        in_vec,
+        out_vec,
+        gdnKernelSource(vectorized, capture_seq),
+        "",
+        true,
+        false,
+    );
+    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+    Cache.kernel = kernel;
+    return kernel;
+}
+
+fn getGdnKernel(vector_gate: bool) !mlx.mlx_fast_metal_kernel {
+    return if (vector_gate) getGdnKernelFor(true, false) else getGdnKernelFor(false, false);
+}
+
+fn getGdnKernelSeq(vector_gate: bool) !mlx.mlx_fast_metal_kernel {
+    return if (vector_gate) getGdnKernelFor(true, true) else getGdnKernelFor(false, true);
+}
+
+// ── GatedDeltaNet blocked-seq PREFILL kernel ──
+// Port of oMLX's `gated_delta_blocked_seq` (custom_kernels/qwen35_prefill/
+// gdn.py, Apache-2.0, oMLX by jundot — keep this provenance chain). Same
+// EXACT recurrence as GDN_KERNEL_SOURCE — no chunked/WY reformulation —
+// restructured for Apple-GPU efficiency: k/q/v staged into threadgroup
+// memory in TB-token blocks with coalesced cooperative loads (the stock
+// kernel re-reads k/q from device once per (Dv/4)-slice threadgroup => 32x
+// redundant traffic, ~13 GB per 16K-token layer), state register-resident
+// as (dv row, 16-wide d segment) fragments, and the k·state / q·state
+// contractions reduced across the 8 segment-threads of a dv row via
+// simd_shuffle_down — no threadgroup barriers in the hot token loop. Their
+// measurement: 14.9 ms vs 29.7 ms per layer @16K = ~2x over the stock
+// kernel shape; 48 of the 27B's 64 layers are GDN.
+// Geometry contract (checked by gdnBlockedEligible): Dk == 128 exactly
+// (8 threads x 16-wide fragments), Dv % 32 == 0 (DB=32 dv rows per
+// threadgroup). Anything else — and decode (T==1), PLD/MTP verify, and the
+// per-position-state capture path — stays on the stock kernels.
+// Kill switch: MLX_SERVE_GDN_BLOCKED=0; block size: MLX_SERVE_GDN_BLOCK_T
+// (16|32|48, default 32 for bf16 — Metal's 32 KiB threadgroup limit governs,
+// and it is a function of the INPUT WIDTH, not a constant: fp32 activations
+// stage twice the bytes and clamp to 16 via gdnBlockTFor. GDN inputs are NOT
+// always bf16 — an f16 checkpoint promotes its activations to f32).
+
+/// Test seam: forces the blocked-prefill route on/off without the environment.
+pub var gdn_blocked_override: ?bool = null;
+var gdn_blocked_env_cached: ?bool = null;
+
+pub fn gdnBlockedEnabled() bool {
+    if (gdn_blocked_override) |v| return v;
+    if (gdn_blocked_env_cached) |v| return v;
+    const raw = std.c.getenv("MLX_SERVE_GDN_BLOCKED");
+    const enabled = raw == null or !std.mem.eql(u8, std.mem.sliceTo(raw.?, 0), "0");
+    gdn_blocked_env_cached = enabled;
+    return enabled;
+}
+
+/// Prefill-width floor for the blocked kernel (mirrors oMLX's OMLX_GDN_MIN_T
+/// default). Below this the per-token stock kernel wins on launch overhead.
+pub const GDN_BLOCKED_MIN_T: c_int = 64;
+
+/// Pure routing predicate: geometry + width gate for the blocked-seq kernel.
+pub fn gdnBlockedEligible(seq_len: c_int, dk: c_int, dv: c_int, num_k_heads: c_int, num_v_heads: c_int) bool {
+    if (seq_len < GDN_BLOCKED_MIN_T) return false;
+    if (dk != 128) return false;
+    if (dv < 32 or @rem(dv, 32) != 0) return false;
+    if (num_k_heads <= 0 or @rem(num_v_heads, num_k_heads) != 0) return false;
+    return true;
+}
+
+/// Metal's threadgroup memory budget per threadgroup on Apple GPUs. The
+/// blocked kernel stages k/q/v in threadgroup memory, so this is a HARD cap on
+/// TB x input width — exceed it and the kernel does not compile.
+const METAL_TG_BYTES: usize = 32 * 1024;
+
+/// Threadgroup bytes the blocked kernel stages per TB-token block:
+/// `k_s`+`q_s` [TB][Dk+8] and `v_s` [TB][DB+8] at the input width, plus the
+/// `g_s`/`b_s` [TB] f32 rows. Mirrors the declarations in
+/// GDN_KERNEL_BLOCKED_BODY — change one, change the other.
+pub fn gdnBlockedTgBytes(tb: u32, dk: c_int, in_elem_size: usize) usize {
+    const DB: usize = 32; // dv rows per threadgroup
+    const t: usize = tb;
+    const k: usize = @intCast(dk);
+    return t * (2 * (k + 8) * in_elem_size + (DB + 8) * in_elem_size + 2 * @sizeOf(f32));
+}
+
+/// Largest supported block size <= `requested` whose staging fits the budget
+/// at this input width, or null when even the smallest does not (decline the
+/// blocked route and stay on the stock kernel).
+///
+/// The width is NOT a constant: bf16 and f16 checkpoints stage 2 bytes and
+/// keep the requested size, but an f16 checkpoint promotes its activations to
+/// f32 (f16 (x) f32-scalar -> f32), and at 4 bytes TB=32 needs 40 KiB. Block
+/// size and input dtype are therefore ONE decision — picking them apart is how
+/// a valid-looking config produces a kernel that cannot compile.
+pub fn gdnBlockTFor(requested: u32, dk: c_int, in_elem_size: usize) ?u32 {
+    var best: ?u32 = null;
+    for (GDN_BLOCKED_TBS) |cand| {
+        if (cand > requested) continue;
+        if (gdnBlockedTgBytes(cand, dk, in_elem_size) > METAL_TG_BYTES) continue;
+        if (best == null or cand > best.?) best = cand;
+    }
+    return best;
+}
+
+const GDN_BLOCKED_TBS = [_]u32{ 16, 32, 48 };
+var gdn_blocked_cached: [GDN_BLOCKED_TBS.len]?mlx.mlx_fast_metal_kernel = @splat(null);
+var gdn_block_t_cached: ?u32 = null;
+
+pub fn gdnBlockT() u32 {
+    if (gdn_block_t_cached) |v| return v;
+    const v: u32 = blk: {
+        const raw = std.c.getenv("MLX_SERVE_GDN_BLOCK_T") orelse break :blk 32;
+        const parsed = std.fmt.parseInt(u32, std.mem.sliceTo(raw, 0), 10) catch break :blk 32;
+        for (GDN_BLOCKED_TBS) |cand| {
+            if (cand == parsed) break :blk parsed;
+        }
+        break :blk 32;
+    };
+    gdn_block_t_cached = v;
+    return v;
+}
+
+// Body of the blocked-seq kernel; the `constexpr int TB = N;` line is
+// prepended per block size by gdnBlockedSource (one cached kernel per TB,
+// DISTINCT names — two specializations sharing a name bind the wrong binary).
+// Faithful transcription of oMLX's _KERNEL_S_SRC with one generalization:
+// state loads/stores go through vec<StT,4> (theirs hard-codes float4 — their
+// state is fp32, ours rides the bf16 ssm_state buffer exactly like the stock
+// kernel, so cross-chunk behavior is unchanged).
+const GDN_KERNEL_BLOCKED_BODY =
+    \\constexpr int DB = 32;                             // dv rows per threadgroup
+    \\const int tid = thread_position_in_threadgroup.x;  // 0..255
+    \\const int blk = threadgroup_position_in_grid.x;    // Dv/DB block
+    \\const int hv  = threadgroup_position_in_grid.y;
+    \\const int b   = threadgroup_position_in_grid.z;
+    \\const int hk  = hv / (Hv / Hk);
+    \\const int dv0 = blk * DB;
+    \\
+    \\// thread -> (dv row, 16-wide d segment); 8 threads per dv row, all in
+    \\// the same simdgroup (lane = (dvr%4)*8 + seg).
+    \\const int dvr = tid / 8;            // 0..31
+    \\const int seg = tid % 8;            // 0..7
+    \\const int d0  = seg * 16;
+    \\
+    \\threadgroup InT k_s[TB][Dk + 8];
+    \\threadgroup InT q_s[TB][Dk + 8];
+    \\threadgroup InT v_s[TB][DB + 8];
+    \\threadgroup float g_s[TB];
+    \\threadgroup float b_s[TB];
+    \\
+    \\auto k_base = k + ((size_t)b * T * Hk + hk) * Dk;
+    \\auto q_base = q + ((size_t)b * T * Hk + hk) * Dk;
+    \\auto v_base = v + ((size_t)b * T * Hv + hv) * Dv + dv0;
+    \\const size_t krow = (size_t)Hk * Dk;
+    \\
+    \\// state fragment in registers: [dv0+dvr][d0..d0+16]
+    \\float4 st[4];
+    \\{
+    \\    const device vec<StT,4>* S_in = (const device vec<StT,4>*)(
+    \\        state_in + (((size_t)b * Hv + hv) * Dv + dv0 + dvr) * Dk + d0);
+    \\    for (int i = 0; i < 4; ++i) st[i] = float4(S_in[i]);
+    \\}
+    \\
+    \\device OutT* y_base = y + ((size_t)b * T * Hv + hv) * Dv + dv0;
+    \\
+    \\for (int t0 = 0; t0 < T; t0 += TB) {
+    \\    const int tt = min(TB, T - t0);
+    \\    // cooperative staging (coalesced): k/q rows, v slice, g/beta
+    \\    for (int p = tid; p < tt * Dk; p += 256) {
+    \\        const int r = p / Dk, d = p % Dk;
+    \\        k_s[r][d] = static_cast<InT>(k_base[(size_t)(t0 + r) * krow + d]);
+    \\        q_s[r][d] = static_cast<InT>(q_base[(size_t)(t0 + r) * krow + d]);
+    \\    }
+    \\    for (int p = tid; p < tt * DB; p += 256) {
+    \\        const int r = p / DB, d = p % DB;
+    \\        v_s[r][d] = static_cast<InT>(v_base[(size_t)(t0 + r) * Hv * Dv + d]);
+    \\    }
+    \\    for (int p = tid; p < tt; p += 256) {
+    \\        g_s[p] = (float)g[((size_t)b * T + t0 + p) * Hv + hv];
+    \\        b_s[p] = (float)beta[((size_t)b * T + t0 + p) * Hv + hv];
+    \\    }
+    \\    threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\
+    \\    for (int t = 0; t < tt; ++t) {
+    \\        const float gt = g_s[t];
+    \\        const float bt = b_s[t];
+    \\        const threadgroup vec<InT,4>* k4 =
+    \\            (const threadgroup vec<InT,4>*)&k_s[t][d0];
+    \\        const threadgroup vec<InT,4>* q4 =
+    \\            (const threadgroup vec<InT,4>*)&q_s[t][d0];
+    \\        float4 kf[4];
+    \\        for (int i = 0; i < 4; ++i) kf[i] = float4(k4[i]);
+    \\        // kv_mem = (g*state) . k ; decay applied to state first
+    \\        float4 p4 = 0.0f;
+    \\        for (int i = 0; i < 4; ++i) {
+    \\            st[i] *= gt;
+    \\            p4 += st[i] * kf[i];
+    \\        }
+    \\        float part = p4.x + p4.y + p4.z + p4.w;
+    \\        // reduce across the 8 segment-threads of this dv row
+    \\        part += simd_shuffle_down(part, 4);
+    \\        part += simd_shuffle_down(part, 2);
+    \\        part += simd_shuffle_down(part, 1);
+    \\        const float kv_mem = simd_shuffle(part, (tid % 32) / 8 * 8);
+    \\        const float delta = ((float)v_s[t][dvr] - kv_mem) * bt;
+    \\
+    \\        float4 o4 = 0.0f;
+    \\        for (int i = 0; i < 4; ++i) {
+    \\            st[i] += kf[i] * delta;
+    \\            o4 += st[i] * float4(q4[i]);
+    \\        }
+    \\        float out = o4.x + o4.y + o4.z + o4.w;
+    \\        out += simd_shuffle_down(out, 4);
+    \\        out += simd_shuffle_down(out, 2);
+    \\        out += simd_shuffle_down(out, 1);
+    \\        if (seg == 0) {
+    \\            y_base[(size_t)(t0 + t) * Hv * Dv + dvr] = static_cast<OutT>(out);
+    \\        }
+    \\    }
+    \\    threadgroup_barrier(mem_flags::mem_threadgroup);
+    \\}
+    \\
+    \\{
+    \\    device vec<StT,4>* S_out = (device vec<StT,4>*)(
+    \\        state_out + (((size_t)b * Hv + hv) * Dv + dv0 + dvr) * Dk + d0);
+    \\    for (int i = 0; i < 4; ++i) S_out[i] = vec<StT,4>(st[i]);
+    \\}
+;
+
+fn gdnBlockedSource(comptime tb: u32) [:0]const u8 {
+    return std.fmt.comptimePrint("constexpr int TB = {d};\n", .{tb}) ++ GDN_KERNEL_BLOCKED_BODY;
+}
+
+fn getGdnKernelBlocked(tb: u32) !mlx.mlx_fast_metal_kernel {
+    inline for (GDN_BLOCKED_TBS, 0..) |cand, i| {
+        if (cand == tb) {
+            if (gdn_blocked_cached[i]) |k| return k;
+            const input_names = [_][*:0]const u8{ "q", "k", "v", "g", "beta", "state_in", "T" };
+            const output_names = [_][*:0]const u8{ "y", "state_out" };
+            const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+            defer _ = mlx.mlx_vector_string_free(in_vec);
+            const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+            defer _ = mlx.mlx_vector_string_free(out_vec);
+            const kernel = mlx.mlx_fast_metal_kernel_new(
+                std.fmt.comptimePrint("gated_delta_blocked_tb{d}", .{cand}),
+                in_vec,
+                out_vec,
+                gdnBlockedSource(cand),
+                "",
+                true,
+                false,
+            );
+            if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+            gdn_blocked_cached[i] = kernel;
+            return kernel;
+        }
+    }
+    return error.UnsupportedGdnBlockT;
+}
+
+// ── Verify-width split-K quantized matmul (spec-decode fast path) ──
+//
+// Stock MLX qmm is tuned for M=1 decode (qmv) and large-M prefill (steel);
+// the M=2..8-row shapes of speculative VERIFY forwards (and small decode
+// batches) fall in a dead zone that underuses memory bandwidth, and at huge
+// N (lm_head) the tiny-tile grid thrashes the scheduler. This kernel is a
+// port of MTPLX's split-K verify family (mtplx/verify_kernels.py,
+// Apache-2.0; design + measurement ledger in that file's header — their
+// in-context winner over the wide multi-simdgroup tile): each threadgroup
+// owns FOUR output columns, the K reduction splits across K_PARTS
+// simdgroups (2 for big N, 4 for small N — deep occupancy queues + latency
+// hiding under mixed scheduling with attention/GDN kernels), per-column
+// sequential dequant+FMA chains (the interleaved construction measurably
+// loses), fp32 accumulation, one threadgroup-barrier partial reduction.
+// MROWS/GS/K_PARTS ride as template ints so MLX caches one specialization
+// per shape class. 4-bit affine only (the shipping trunk class); everything
+// else falls through to stock qmm. Numerics: fp32 accumulate in a different
+// order than stock → bf16 tail-ULP class differences (same accepted class
+// as every fused kernel here); parity pinned by the verifyQmm test.
+// Kill switch: MLX_SERVE_VERIFY_QMM=0.
+//
+// NAX lane (M5-class machines): on "applegpu_g17" GPUs under macOS >= 26.2
+// a fixed 16x32x16 tensor-ops tile (MetalPerformancePrimitives matmul2d on
+// the per-core matrix units) extends the family to M 8..16 — past the
+// plain-SIMD register cliff at M=8 (T(7) rounds measured 636 ms vs 115
+// stock on the M4) — covering deep MTP verify widths (seq 8..9), the merged
+// MTP-head forward at high accepted counts, lm_head at M 8..16, and small
+// decode batches. Third-generation port; keep the attribution chain:
+// DFlash (arXiv:2602.06036) → bstnxbt/dflash-mlx verify_qmm.py (Apache-2.0)
+// → MTPLX nax_verify.py (Apache-2.0: the M-padding dispatch, env gating,
+// availability probes) → us (plan: todo-m5-nax.md). The kernel object is
+// NEVER built — not just never dispatched — where the probe is false:
+// matmul2d<.., execution_simdgroup> pipeline creation can fail on non-G17
+// hardware. Switches: MLX_SERVE_VERIFY_QMM_NAX=0 kills the lane;
+// MLX_SERVE_FORCE_GPU_FAMILY_
+// FALLBACK=1 pretends the units are absent (QA rehearsal of the exact
+// M1-M4 path on an M5); MLX_SERVE_VERIFY_QMM_NAX_MIN_M lowers the NAX
+// takeover width (default 8) for the M5-day A/B of routing M 5..7 to NAX
+// (their dispatcher keeps plain SIMD through M=6; our SIMD lanes differ —
+// measure, don't inherit).
+/// Comptime codegen of the per-M split-K kernel body. The row loads, weight
+/// loads, and dequant+FMA chains are emitted as NAMED SCALARS with LITERAL
+/// accumulator indices — the ledger's load-bearing constraint: array-indexed
+/// rows behind a runtime-ish loop stack-spill (measured 10x at M=6 with the
+/// `Vec8 v[MROWS]` form of this same kernel). GS and K_PARTS stay template
+/// ints; M is baked into the source (one cached kernel per M, distinct Metal
+/// host_names — two specializations sharing a name bind the wrong binary).
+/// The activation-FMA lines one output column contributes for a single K
+/// value: `wv` is the dequantized weight, `idx` the element inside the Vec8
+/// activation group. Shared by both plain-SIMD verify tiles so the two cannot
+/// drift.
+fn vqmmAccLines(comptime m: usize, comptime j: usize, comptime idx: []const u8) []const u8 {
+    comptime {
+        @setEvalBranchQuota(200_000);
+        var out: []const u8 = "";
+        for (0..m) |r| {
+            out = out ++ std.fmt.comptimePrint("        acc[{d}] += float(v{d}[{s}]) * wv;\n", .{ j * m + r, r, idx });
+        }
+        return out;
+    }
+}
+
+/// Hoisted weight WORDS for one column, decoded per width.
+///
+/// One `pack` iteration always covers 8 K values (that is the Vec8 activation
+/// load), so its weights are exactly BITS bytes at
+/// `w_q + n * K_bytes + pack * BITS`. The loads stay HOISTED above the FMA
+/// chains — the tile's whole shape is "issue every column's weight word, then
+/// run one sequential chain per column", and leaving the load inside the chain
+/// serializes it behind the previous column's arithmetic. Hoisting only the
+/// POINTER is not enough: the widened arms must hoist the BYTES.
+///
+/// Widest load each width's alignment allows. 4-bit keeps its original aligned
+/// uint32 verbatim — that width must stay bit-identical, and it is this
+/// refactor's tripwire. 8-bit sits on `pack * 8` and takes two uints (not one
+/// ulong: 4-byte alignment is what the shipped 4-bit path already assumes of
+/// this buffer, and widening that assumption for one fused load buys nothing).
+/// 6-bit lands on `pack * 6`, only 2-aligned, so three ushorts re-assembled
+/// into two 3-byte words. 5-bit on `pack * 5` is 1-aligned and takes bytes.
+fn vqmmColumnLoad(comptime j: usize) []const u8 {
+    comptime {
+        @setEvalBranchQuota(200_000);
+        return std.fmt.comptimePrint(
+            \\  uint32_t p{d}; ulong r{d}; uint32_t a{d}0; uint32_t a{d}1;
+            \\  if constexpr (BITS == 4) {{ p{d} = w_q[(n0 + {d}) * K_by_p + pack]; }}
+            \\  else {{
+            \\    const device uchar* wp = ((const device uchar*)w_q) + (n0 + {d}) * K_bytes + pack * BITS;
+            \\    if constexpr (BITS == 8) {{
+            \\      const device uint* wu = (const device uint*)wp;
+            \\      r{d} = ulong(wu[0]) | (ulong(wu[1]) << 32);
+            \\    }} else if constexpr (BITS == 5) {{
+            \\      r{d} = ulong(wp[0]) | (ulong(wp[1]) << 8) | (ulong(wp[2]) << 16) |
+            \\             (ulong(wp[3]) << 24) | (ulong(wp[4]) << 32);
+            \\    }} else {{
+            \\      const device ushort* wh = (const device ushort*)wp;
+            \\      uint32_t h0 = uint32_t(wh[0]); uint32_t h1 = uint32_t(wh[1]); uint32_t h2 = uint32_t(wh[2]);
+            \\      a{d}0 = h0 | ((h1 & 0xFFu) << 16);
+            \\      a{d}1 = (h1 >> 8) | (h2 << 8);
+            \\    }}
+            \\  }}
+            \\
+        , .{ j, j, j, j, j, j, j, j, j, j, j });
+    }
+}
+
+/// Per-column dequant + FMA chain, one arm per supported affine width. The
+/// byte-addressed arms are lifted from the NAX m16 tile's validated unpack
+/// (4 values per 3 bytes at 6 bits, 8 per 5 bytes at 5, one byte per value at
+/// 8) — this is not a fresh reading of MLX's packing.
+fn vqmmColumnChain(comptime m: usize, comptime j: usize) []const u8 {
+    comptime {
+        @setEvalBranchQuota(200_000);
+        const acc_ki = vqmmAccLines(m, j, "ki");
+        const acc_hi = vqmmAccLines(m, j, "4 + ki");
+        return std.fmt.comptimePrint(
+            \\  {{
+            \\    float sj = s{d}; float bj = b{d};
+            \\    if constexpr (BITS == 4) {{
+            \\      for (int ki = 0; ki < 8; ++ki) {{
+            \\        float wv = float((p{d} >> (ki * 4)) & 0xFu) * sj + bj;
+            \\{s}      }}
+            \\    }} else if constexpr (BITS == 8) {{
+            \\      for (int ki = 0; ki < 8; ++ki) {{
+            \\        float wv = float(uint32_t((r{d} >> (ki * 8)) & 0xFFul)) * sj + bj;
+            \\{s}      }}
+            \\    }} else if constexpr (BITS == 5) {{
+            \\      for (int ki = 0; ki < 8; ++ki) {{
+            \\        float wv = float(uint32_t((r{d} >> (ki * 5)) & 0x1Ful)) * sj + bj;
+            \\{s}      }}
+            \\    }} else {{
+            \\      for (int ki = 0; ki < 4; ++ki) {{
+            \\        float wv = float((a{d}0 >> (ki * 6)) & 0x3Fu) * sj + bj;
+            \\{s}      }}
+            \\      for (int ki = 0; ki < 4; ++ki) {{
+            \\        float wv = float((a{d}1 >> (ki * 6)) & 0x3Fu) * sj + bj;
+            \\{s}      }}
+            \\    }}
+            \\  }}
+            \\
+        , .{ j, j, j, acc_ki, j, acc_ki, j, acc_ki, j, acc_ki, j, acc_hi });
+    }
+}
+
+fn verifyQmmSource(comptime m: usize, comptime bn: usize) [:0]const u8 {
+    comptime {
+        // The per-width unpack ladder multiplies the comptime string work.
+        @setEvalBranchQuota(200_000);
+        const nacc = bn * m;
+        var body: []const u8 = "";
+        // Row activation loads, all up front.
+        for (0..m) |r| {
+            body = body ++ std.fmt.comptimePrint("  Vec8 v{d} = xv[({d} * K + k_base) / 8];\n", .{ r, r });
+        }
+        // Weight handles for the owned columns, then scales/biases.
+        for (0..bn) |j| {
+            body = body ++ vqmmColumnLoad(j);
+        }
+        for (0..bn) |j| {
+            body = body ++ std.fmt.comptimePrint("  float s{d} = float(scales[(n0 + {d}) * K_by_gs + gi]); float b{d} = float(biases[(n0 + {d}) * K_by_gs + gi]);\n", .{ j, j, j, j });
+        }
+        // One sequential dequant+FMA chain per output column (column-major
+        // construction; the interleaved form measurably loses).
+        for (0..bn) |j| {
+            body = body ++ vqmmColumnChain(m, j);
+        }
+        var acc_init: []const u8 = "";
+        for (0..nacc) |i| {
+            acc_init = acc_init ++ std.fmt.comptimePrint("acc[{d}] = 0.0f; ", .{i});
+        }
+        var acc_sum: []const u8 = "";
+        for (0..nacc) |i| {
+            acc_sum = acc_sum ++ std.fmt.comptimePrint("acc[{d}] = simd_sum(acc[{d}]); ", .{ i, i });
+        }
+        return std.fmt.comptimePrint(
+            \\auto part = simdgroup_index_in_threadgroup;
+            \\auto lane = thread_index_in_simdgroup;
+            \\auto tg_n = threadgroup_position_in_grid.y;
+            \\
+            \\int K = int(K_size);
+            \\int N = int(N_size);
+            \\int K_by_p = K / 8;
+            \\int K_bytes = (K * BITS) / 8;
+            \\int K_by_gs = K / GS;
+            \\int per_part = K_by_p / K_PARTS;
+            \\int n0 = int(tg_n) * {d};
+            \\int p_start = int(part) * per_part;
+            \\int p_end = (int(part) == K_PARTS - 1) ? K_by_p : p_start + per_part;
+            \\
+            \\float acc[{d}];
+            \\{s}
+            \\
+            \\using Vec8 = vec<T, 8>;
+            \\const device Vec8 *xv = (const device Vec8*)x;
+            \\
+            \\for (int pack = p_start + int(lane); pack < p_end; pack += 32) {{
+            \\  int k_base = pack * 8;
+            \\  int gi = k_base / GS;
+            \\{s}
+            \\}}
+            \\
+            \\{s}
+            \\
+            \\threadgroup float partials[K_PARTS * {d}];
+            \\if (lane == 0) {{
+            \\  _Pragma("unroll")
+            \\  for (int i = 0; i < {d}; ++i) {{
+            \\    partials[int(part) * {d} + i] = acc[i];
+            \\  }}
+            \\}}
+            \\threadgroup_barrier(mem_flags::mem_threadgroup);
+            \\
+            \\if (part == 0) {{
+            \\  for (int i = int(lane); i < {d}; i += 32) {{
+            \\    float total = 0.0f;
+            \\    _Pragma("unroll")
+            \\    for (int p = 0; p < K_PARTS; ++p) {{
+            \\      total += partials[p * {d} + i];
+            \\    }}
+            \\    int j = i / {d};
+            \\    int row = i - j * {d};
+            \\    y[row * N + n0 + j] = T(total);
+            \\  }}
+            \\}}
+        , .{ bn, nacc, acc_init, body, acc_sum, nacc, nacc, nacc, nacc, nacc, m, m });
+    }
+}
+
+/// Wide multi-simdgroup tile for HUGE N (the lm_head class): NSG independent
+/// simdgroups ride one threadgroup purely to give the scheduler fewer,
+/// heavier units — the split-K tiny-tile grid measurably thrashes there
+/// (2.1x stock at M=4), while this tile holds 1.18x off the weight-stream
+/// floor per the source ledger. Full-K per simdgroup, no barrier.
+fn verifyQmmMsgSource(comptime m: usize, comptime bn: usize) [:0]const u8 {
+    comptime {
+        // The per-width unpack ladder multiplies the comptime string work.
+        @setEvalBranchQuota(200_000);
+        const nacc = bn * m;
+        var body: []const u8 = "";
+        for (0..m) |r| {
+            body = body ++ std.fmt.comptimePrint("  Vec8 v{d} = xv[({d} * K + k_base) / 8];\n", .{ r, r });
+        }
+        for (0..bn) |j| {
+            body = body ++ vqmmColumnLoad(j);
+        }
+        for (0..bn) |j| {
+            body = body ++ std.fmt.comptimePrint("  float s{d} = float(scales[(n0 + {d}) * K_by_gs + gi]); float b{d} = float(biases[(n0 + {d}) * K_by_gs + gi]);\n", .{ j, j, j, j });
+        }
+        for (0..bn) |j| {
+            body = body ++ vqmmColumnChain(m, j);
+        }
+        var acc_init: []const u8 = "";
+        for (0..nacc) |i| {
+            acc_init = acc_init ++ std.fmt.comptimePrint("acc[{d}] = 0.0f; ", .{i});
+        }
+        var acc_sum: []const u8 = "";
+        for (0..nacc) |i| {
+            acc_sum = acc_sum ++ std.fmt.comptimePrint("acc[{d}] = simd_sum(acc[{d}]); ", .{ i, i });
+        }
+        return std.fmt.comptimePrint(
+            \\auto sg = simdgroup_index_in_threadgroup;
+            \\auto lane = thread_index_in_simdgroup;
+            \\auto tg_n = threadgroup_position_in_grid.y;
+            \\
+            \\int K = int(K_size);
+            \\int N = int(N_size);
+            \\int K_by_p = K / 8;
+            \\int K_bytes = (K * BITS) / 8;
+            \\int K_by_gs = K / GS;
+            \\int n0 = (int(tg_n) * NSG + int(sg)) * {d};
+            \\if (n0 + {d} >= N) {{ return; }}
+            \\
+            \\float acc[{d}];
+            \\{s}
+            \\
+            \\using Vec8 = vec<T, 8>;
+            \\const device Vec8 *xv = (const device Vec8*)x;
+            \\
+            \\for (int pack = int(lane); pack < K_by_p; pack += 32) {{
+            \\  int k_base = pack * 8;
+            \\  int gi = k_base / GS;
+            \\{s}
+            \\}}
+            \\
+            \\{s}
+            \\
+            \\if (lane < {d}) {{
+            \\  int j = int(lane) / {d};
+            \\  int row = int(lane) - j * {d};
+            \\  y[row * N + n0 + j] = T(acc[int(lane)]);
+            \\}}
+        , .{ bn, bn - 1, nacc, acc_init, body, acc_sum, nacc, m, m });
+    }
+}
+
+/// msg column-tile width per M: 4 columns through M=6, 2 for M=7 (14
+/// accumulators — under the 24 ceiling; covers the depth-6 verify lm_head).
+fn vqmmMsgBn(m: c_int) c_int {
+    return if (m <= 6) 4 else 2;
+}
+
+const VQMM_MSG_SOURCES = blk: {
+    @setEvalBranchQuota(20_000_000);
+    break :blk [6][:0]const u8{
+        verifyQmmMsgSource(2, 4), verifyQmmMsgSource(3, 4), verifyQmmMsgSource(4, 4),
+        verifyQmmMsgSource(5, 4), verifyQmmMsgSource(6, 4), verifyQmmMsgSource(7, 2),
+    };
+};
+const VQMM_MSG_NAMES = [6][*:0]const u8{
+    "mlxserve_vqmm_msg_m2", "mlxserve_vqmm_msg_m3", "mlxserve_vqmm_msg_m4",
+    "mlxserve_vqmm_msg_m5", "mlxserve_vqmm_msg_m6", "mlxserve_vqmm_msg_m7",
+};
+
+var vqmm_msg_kernels: [6]?mlx.mlx_fast_metal_kernel = @splat(null);
+
+fn getVerifyQmmMsgKernel(m: c_int) !mlx.mlx_fast_metal_kernel {
+    if (m < 2 or m > 7) return error.UnsupportedShape;
+    const idx: usize = @intCast(m - 2);
+    if (vqmm_msg_kernels[idx]) |k| return k;
+    const input_names = [_][*:0]const u8{ "x", "w_q", "scales", "biases", "K_size", "N_size" };
+    const output_names = [_][*:0]const u8{"y"};
+    const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+    defer _ = mlx.mlx_vector_string_free(in_vec);
+    const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+    defer _ = mlx.mlx_vector_string_free(out_vec);
+    const kernel = mlx.mlx_fast_metal_kernel_new(
+        VQMM_MSG_NAMES[idx],
+        in_vec,
+        out_vec,
+        VQMM_MSG_SOURCES[idx],
+        "",
+        true,
+        false,
+    );
+    if (kernel.ctx == null) return error.MetalKernelCompileFailed;
+    vqmm_msg_kernels[idx] = kernel;
+    return kernel;
+}
+
+/// Crossrow M 8-9 kernel body (4-bit g64 only): port of the
+/// qwen-3.8-mtp-challenge `qmv_fast_crossrow_affine4_g64` (see NOTICE) — a
+/// qmv-shaped tile where ONE packed-weight read serves TWO input rows, so
+/// the M 8/9 widths past the split-K register cliff keep qmv-class weight
+/// traffic. Grid: tgp.x = input pair (ceil(M/2) groups, M baked), tgp.y =
+/// 8-row output tile (2 simdgroups x 4 rows); 32 lanes x 16 values = one
+/// 512-wide k-block per iteration; each 4-lane cluster shares one g64
+/// scale group. Activations pre-scale /1,/16,/256,/4096 so the nibble dot
+/// runs on MASKED (unshifted) weights; the raw-x sum carries the affine
+/// bias term. Every loop bound is a literal constant (fully unrolled — the
+/// named-scalar rule is satisfied the way their C++ template satisfies it).
+/// Deviation from theirs: the odd-M tail group loads a ZEROED second row
+/// instead of a separate single-row dot — identical output, the unused
+/// half rides arithmetic the weight-bound kernel has free.
+fn verifyQmmCrossrowSource(comptime m: usize) [:0]const u8 {
+    comptime {
+        @setEvalBranchQuota(400_000);
+        return std.fmt.comptimePrint(
+            \\auto sg = simdgroup_index_in_threadgroup;
+            \\auto lane = thread_index_in_simdgroup;
+            \\auto tgp = threadgroup_position_in_grid;
+            \\
+            \\int K = int(K_size);
+            \\int N = int(N_size);
+            \\const int first_m = int(tgp.x) * 2;
+            \\const int out_row = int(tgp.y) * 8 + int(sg) * 4;
+            \\const int K_bytes = K / 2;
+            \\const int K_groups = K / 64;
+            \\const bool has_pair = (first_m + 1) < {d};
+            \\
+            \\const device uint8_t* wq8 = (const device uint8_t*)w_q;
+            \\float2 pres[4];
+            \\_Pragma("unroll")
+            \\for (int r = 0; r < 4; ++r) {{ pres[r] = float2(0.0f); }}
+            \\
+            \\for (int k = 0; k < K; k += 512) {{
+            \\  ushort pk[4][4];
+            \\  float sl[4]; float bl[4];
+            \\  _Pragma("unroll")
+            \\  for (int r = 0; r < 4; ++r) {{
+            \\    const int row = out_row + r;
+            \\    const device uint16_t* ws = (const device uint16_t*)(wq8 + row * K_bytes + (k >> 1) + int(lane) * 8);
+            \\    _Pragma("unroll")
+            \\    for (int i = 0; i < 4; ++i) {{ pk[r][i] = ws[i]; }}
+            \\    const int gi = row * K_groups + (k >> 6) + int(lane) / 4;
+            \\    sl[r] = float(scales[gi]);
+            \\    bl[r] = float(biases[gi]);
+            \\  }}
+            \\  const device T* xm0 = x + first_m * K + k + int(lane) * 16;
+            \\  float x0[16]; float x1[16];
+            \\  float sum0 = 0.0f; float sum1 = 0.0f;
+            \\  _Pragma("unroll")
+            \\  for (int i = 0; i < 16; i += 4) {{
+            \\    sum0 += float(xm0[i]) + float(xm0[i+1]) + float(xm0[i+2]) + float(xm0[i+3]);
+            \\    x0[i] = float(xm0[i]);
+            \\    x0[i+1] = float(xm0[i+1]) / 16.0f;
+            \\    x0[i+2] = float(xm0[i+2]) / 256.0f;
+            \\    x0[i+3] = float(xm0[i+3]) / 4096.0f;
+            \\  }}
+            \\  if (has_pair) {{
+            \\    const device T* xm1 = xm0 + K;
+            \\    _Pragma("unroll")
+            \\    for (int i = 0; i < 16; i += 4) {{
+            \\      sum1 += float(xm1[i]) + float(xm1[i+1]) + float(xm1[i+2]) + float(xm1[i+3]);
+            \\      x1[i] = float(xm1[i]);
+            \\      x1[i+1] = float(xm1[i+1]) / 16.0f;
+            \\      x1[i+2] = float(xm1[i+2]) / 256.0f;
+            \\      x1[i+3] = float(xm1[i+3]) / 4096.0f;
+            \\    }}
+            \\  }} else {{
+            \\    _Pragma("unroll")
+            \\    for (int i = 0; i < 16; ++i) {{ x1[i] = 0.0f; }}
+            \\  }}
+            \\  _Pragma("unroll")
+            \\  for (int r = 0; r < 4; ++r) {{
+            \\    float2 acc = float2(0.0f);
+            \\    _Pragma("unroll")
+            \\    for (int i = 0; i < 4; ++i) {{
+            \\      acc += float2(x0[4*i],   x1[4*i])   * float(pk[r][i] & 0x000f);
+            \\      acc += float2(x0[4*i+1], x1[4*i+1]) * float(pk[r][i] & 0x00f0);
+            \\      acc += float2(x0[4*i+2], x1[4*i+2]) * float(pk[r][i] & 0x0f00);
+            \\      acc += float2(x0[4*i+3], x1[4*i+3]) * float(pk[r][i] & 0xf000);
+            \\    }}
+            \\    pres[r] += sl[r] * acc + float2(sum0, sum1) * bl[r];
+            \\  }}
+            \\}}
+            \\
+            \\_Pragma("unroll")
+            \\for (int r = 0; r < 4; ++r) {{
+            \\  float r0 = simd_sum(pres[r].x);
+            \\  float r1 = simd_sum(pres[r].y);
+            \\  if (lane == 0) {{
+            \\    y[first_m * N + out_row + r] = T(r0);
+            \\    if (has_pair) {{ y[(first_m + 1) * N + out_row + r] = T(r1); }}
+            \\  }}
+            \\}}
+        , .{m});
+    }
+}
+
+const VQMM_XR_SOURCES = blk: {
+    @setEvalBranchQuota(20_000_000);
+    break :blk [2][:0]const u8{ verifyQmmCrossrowSource(8), verifyQmmCrossrowSource(9) };
+};
+const VQMM_XR_NAMES = [2][*:0]const u8{ "mlxserve_vqmm_xr_m8", "mlxserve_vqmm_xr_m9" };
+
+var vqmm_xr_kernels: [2]?mlx.mlx_fast_metal_kernel = @splat(null);
+
+fn getVerifyQmmCrossrowKernel(m: c_int) !mlx.mlx_fast_metal_kernel {
+    if (m < 8 or m > 9) return error.UnsupportedShape;
+    const idx: usize = @intCast(m - 8);
+    if (vqmm_xr_kernels[idx]) |k| return k;
+    const input_names = [_][*:0]const u8{ "x", "w_q", "scales", "biases", "K_size", "N_size" };
+    const output_names = [_][*:0]const u8{"y"};
+    const in_vec = mlx.mlx_vector_string_new_data(&input_names, input_names.len);
+    defer _ = mlx.mlx_vector_string_free(in_vec);
+    const out_vec = mlx.mlx_vector_string_new_data(&output_names, output_names.len);
+    defer _ = mlx.mlx_vector_string_free(out_vec);
+    const kernel = mlx.mlx_fast_metal_kernel_new(
+        VQMM_XR_NAMES[idx],
