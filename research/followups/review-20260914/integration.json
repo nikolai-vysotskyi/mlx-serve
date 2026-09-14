@@ -12,5 +12,9 @@
   },
   "new_full_model_measurement": false,
   "native_mtp_ahead_enabled": false,
-  "remote_ci": "pending"
+  "remote_ci": {
+    "run": 34829114022,
+    "status": "in_progress_at_handoff",
+    "url": "https://github.com/ddalcu/mlx-serve/actions/runs/34829114022"
+  }
 }

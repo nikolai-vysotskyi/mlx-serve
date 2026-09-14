@@ -7,4 +7,4 @@ No new performance measurement or MTP/PLE enablement.
 - Extend the existing moeMLP2WithRouter core with the research group override. The normal/diagnostic wrapper supplies no router override and skip_shared=false; upstream joined verification supplies its router and skip_shared=true.
 - Require !skip_shared for the wide prefill group. Preserve upstream route packing, indexed expert input, paired down and fused verification reduction. Select the existing prefill MPP activation/reduction only for its original guarded wide path.
 - Keep all upstream additions and both documentation sections. Manual pin fix92be945 retained. The native-MTP-ahead patch stays unintegrated.
-- ReleaseFast7/7 passed before the full suite. Full suite log:upstream-tests.log (currently running).
+- ReleaseFast7/7 passed before the full suite. Full suite completed:2512 passed/169 skipped, exit0. Log:upstream-tests.log.
