@@ -1,8 +1,8 @@
-# Frozen input for the 2347 tok/s screen
+# Reproducing 2347 tok/s on M5 Max 128 GB
 
-This package freezes the input and settings behind **2347.1 tok/s at64,947 tokens**. It is a warmed, prefix-uncached HTTP recall screen. It is not a claim that every65K prompt, llmprobe workload, serving mode or later PR head runs at that rate.
+**2347.1 tok/s at 64,947 uncached input tokens is a recorded result and a reproduction target.** The original response reported prompt_ms 27671.095 and prompt_per_second 2347.106; client wall time was 27.887839 seconds, or 2328.9 input tokens/s including decode and transport. Ten output tokens were generated; cached_tokens was zero.
 
-The original candidate response reported prompt_ms27671.095, prompt_per_second2347.106,10 output tokens and cached_tokens0. HTTP wall time was27.887839s, giving2328.9 input tokens/s even including decode and transport. The2300 observation is real; the open question is why another configuration/workload gives1800.
+A materially lower rate on a comparable idle M5 Max 128 GB run is an unresolved reproducibility gap that needs investigation. Calling the measurement special does not explain it. The executable, request and settings below define the replay; differences in enabled paths, input, chunking and session history must be isolated to establish what delivers this rate in normal serving.
 
 ## What is frozen
 
@@ -23,7 +23,7 @@ Use the mixed4/8-bit checkpoint. Its exact content revision was not frozen in th
 
 Required original profile: `MLX_SERVE_PREFILL_CHUNK=8192`, QSA pair/HC/GDN on, PLE packed+ahead/grouping/HC-upmix on for candidate7, MoE MPP off, MTP/PLD/drafter off, ctx131072, prefix-cache entries0 and KV quantization off. The original server launch did not explicitly supply `--prefix-cache-disk`; retain the actual cache configuration in the comparison metadata. All measured requests returned cached_tokens0.
 
-The environment width pin is essential: the CLI8192 maximum alone still encounters the default4096 hd256MoE cap. MTP-on also declines the current PLE-ahead path, regardless of its flag.
+For the recorded source revision, the environment width pin is essential: the CLI8192 maximum alone still encounters the default4096 hd256MoE cap. New upstream main changed this policy in #423; record the actual chunk widths when comparing revisions. MTP-on also declines the current PLE-ahead path, regardless of its flag.
 
 ## Replay the original sequence
 
@@ -50,4 +50,4 @@ For a request-only diagnostic on an already configured server, the frozen JSON c
 
 Use the driver's JSON and server log. Confirm the manifest's prompt hash,64,947 actual input tokens, cached_tokens explicitly0, actual chunk widths, all candidate engagement lines and absence of MTP/PLD/drafter activity. Record prompt_ms/prompt_per_second, client wall time, source/binary/library fingerprints, model revision and GPU/power telemetry. A missing field, failed recall, different token count or cooldown timeout is an invalid/incomplete reproduction, not a slower valid cell.
 
-The same physical local M5 also recorded1761 tok/s in the earlier d23d9df llmprobe ladder. That used a different head/workload and sustained protocol, with research extras disabled. It prevents treating2300 as an unconditional hardware property; it does not isolate which difference caused the gap.
+The same physical local M5 also recorded1761 tok/s in the earlier d23d9df llmprobe ladder. That used a different head/workload and sustained protocol, with research extras disabled. This is another discrepancy to reconcile; it does not identify the cause or negate the recorded2300+ result.
