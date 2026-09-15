@@ -1,0 +1,300 @@
+{
+  "binary_sha256": "cc7f4574620557b263212e009c7e933783a3e0fac4a00ff778d708467de59d48",
+  "library_sha256": {
+    "libmlx.dylib": "c63811e0fe9afb5463f60137b6db913da0de73634cc736c8e06771a62b1db477",
+    "libmlxc.dylib": "00923baa64b261e0570df4ec034037c0adc7309cd9763355861052f1f85b23d2",
+    "mlx.metallib": "dc59d1cceb1a5c7e578232e6e41e28e2c73c9463ac6dbc3886c3ee17ffc270ed"
+  },
+  "model_metadata_sha256": {
+    "config.json": "fe0b5952857299b31d75bedf1d8897faea14b4116a04c73a73152361e7788f59",
+    "tokenizer.json": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+    "tokenizer_config.json": "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27",
+    "model.safetensors.index.json": "095d52d076b5ecdc50d3206ef645cc9ca9a571d969cef7685a75f5018a4ce068"
+  },
+  "power_modes_raw": {
+    "Battery Power": {
+      "powermode": "1"
+    },
+    "AC Power": {
+      "powermode": "2"
+    }
+  },
+  "power": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=23199843)\t100%; charged; 0:00 remaining present: true\n",
+  "corpus_sha256": "1b0d4f22b5f08c471a93caac3d5f4729be34c64a04e4c0e303a3fc44bcde36a0",
+  "sequence": "0707",
+  "cooldown": {
+    "gpu_c": 50.0,
+    "fan_max_rpm": 1600,
+    "timeout_s": 180
+  },
+  "source_commit": "087c2109e17bcd97cfa4776b35fd8c49a0491b6c",
+  "hardware": "M5 Max 128 GB; macOS26.5",
+  "prior_record": {
+    "control_tps": 2173.8,
+    "candidate_tps": 2347.1,
+    "candidate_http_wall_s": 27.887838958005887,
+    "output_tokens": 10,
+    "cached_tokens": 0
+  },
+  "records": [
+    {
+      "experiment_arm": 0,
+      "started_unix": 1789481257.6699631,
+      "ended_unix": 1789481287.929987,
+      "prompt_sha256": "d6927da48d558a30339f665d0536288a7e07394c5f0c4daa23eb7e4246d0037e",
+      "wall_s": 30.260479582997505,
+      "whole_http_input_tps": 2146.2647286162596,
+      "response": {
+        "id": "chatcmpl-1789481287929",
+        "object": "chat.completion",
+        "created": 1789481287,
+        "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+        "system_fingerprint": "mlx-serve",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "MAGNOLIA-7731"
+            },
+            "logprobs": null,
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 64947,
+          "completion_tokens": 10,
+          "total_tokens": 64957,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        },
+        "timings": {
+          "prompt_n": 64947,
+          "cached_n": 0,
+          "prompt_ms": 30014.049,
+          "prompt_per_second": 2163.887,
+          "predicted_n": 10,
+          "predicted_ms": 195.265,
+          "predicted_per_second": 51.212,
+          "tokenize_ms": 29.785
+        }
+      },
+      "cooldown": {
+        "wait_s": 38.824918750004144,
+        "samples": [
+          {
+            "timestamp": "2026-09-15T14:07:35.375309+00:00",
+            "gpu_freq_mhz": 0,
+            "gpu_power": 0.0,
+            "temp": {
+              "cpu_temp_avg": 49.32483673095703,
+              "gpu_temp_avg": 49.85268020629883
+            },
+            "fans": [
+              {
+                "max_rpm": 5349,
+                "name": "fan0",
+                "rpm": 1354
+              },
+              {
+                "max_rpm": 5777,
+                "name": "fan1",
+                "rpm": 1453
+              }
+            ]
+          },
+          {
+            "timestamp": "2026-09-15T14:07:36.388177+00:00",
+            "gpu_freq_mhz": 338,
+            "gpu_power": 0.001858342788182199,
+            "temp": {
+              "cpu_temp_avg": 49.02672576904297,
+              "gpu_temp_avg": 49.5578498840332
+            },
+            "fans": [
+              {
+                "max_rpm": 5349,
+                "name": "fan0",
+                "rpm": 1357
+              },
+              {
+                "max_rpm": 5777,
+                "name": "fan1",
+                "rpm": 1452
+              }
+            ]
+          },
+          {
+            "timestamp": "2026-09-15T14:07:37.401263+00:00",
+            "gpu_freq_mhz": 338,
+            "gpu_power": 0.0007516710320487618,
+            "temp": {
+              "cpu_temp_avg": 48.8125,
+              "gpu_temp_avg": 49.31696319580078
+            },
+            "fans": [
+              {
+                "max_rpm": 5349,
+                "name": "fan0",
+                "rpm": 1349
+              },
+              {
+                "max_rpm": 5777,
+                "name": "fan1",
+                "rpm": 1467
+              }
+            ]
+          }
+        ]
+      },
+      "engagement": [
+        "[prefill-experiment] request=2 arm=0 group=false ple=false hc_upmix=false same_process=true",
+        "  [prefill-trace] tokens=64947 chunks=8 chunk_size=8192 chunk_widths=8192..8192 chunked=29920ms eval=62ms last_token=1ms total=29985ms"
+      ],
+      "memory_after": {
+        "active_bytes": 73223867796,
+        "peak_bytes": 78214759746,
+        "available_bytes": 33601683456,
+        "max_safe_context": 262144,
+        "cache_bytes": 1925624591
+      }
+    },
+    {
+      "experiment_arm": 7,
+      "started_unix": 1789481358.713562,
+      "ended_unix": 1789481386.878952,
+      "prompt_sha256": "d6927da48d558a30339f665d0536288a7e07394c5f0c4daa23eb7e4246d0037e",
+      "wall_s": 28.165813750005327,
+      "whole_http_input_tps": 2305.8804754039006,
+      "response": {
+        "id": "chatcmpl-1789481386878",
+        "object": "chat.completion",
+        "created": 1789481386,
+        "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+        "system_fingerprint": "mlx-serve",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "MAGNOLIA-7731"
+            },
+            "logprobs": null,
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 64947,
+          "completion_tokens": 10,
+          "total_tokens": 64957,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        },
+        "timings": {
+          "prompt_n": 64947,
+          "cached_n": 0,
+          "prompt_ms": 27953.158,
+          "prompt_per_second": 2323.423,
+          "predicted_n": 10,
+          "predicted_ms": 191.475,
+          "predicted_per_second": 52.226,
+          "tokenize_ms": 0.029
+        }
+      },
+      "cooldown": {
+        "wait_s": 70.678040083003,
+        "samples": [
+          {
+            "timestamp": "2026-09-15T14:09:16.411286+00:00",
+            "gpu_freq_mhz": 338,
+            "gpu_power": 0.0016472309362143278,
+            "temp": {
+              "cpu_temp_avg": 49.420230865478516,
+              "gpu_temp_avg": 49.91443634033203
+            },
+            "fans": [
+              {
+                "max_rpm": 5349,
+                "name": "fan0",
+                "rpm": 1481
+              },
+              {
+                "max_rpm": 5777,
+                "name": "fan1",
+                "rpm": 1599
+              }
+            ]
+          },
+          {
+            "timestamp": "2026-09-15T14:09:17.423529+00:00",
+            "gpu_freq_mhz": 338,
+            "gpu_power": 0.0007819843012839556,
+            "temp": {
+              "cpu_temp_avg": 49.214637756347656,
+              "gpu_temp_avg": 49.72209930419922
+            },
+            "fans": [
+              {
+                "max_rpm": 5349,
+                "name": "fan0",
+                "rpm": 1473
+              },
+              {
+                "max_rpm": 5777,
+                "name": "fan1",
+                "rpm": 1590
+              }
+            ]
+          },
+          {
+            "timestamp": "2026-09-15T14:09:18.432619+00:00",
+            "gpu_freq_mhz": 338,
+            "gpu_power": 0.0007389506208710372,
+            "temp": {
+              "cpu_temp_avg": 49.0456428527832,
+              "gpu_temp_avg": 49.52213668823242
+            },
+            "fans": [
+              {
+                "max_rpm": 5349,
+                "name": "fan0",
+                "rpm": 1473
+              },
+              {
+                "max_rpm": 5777,
+                "name": "fan1",
+                "rpm": 1598
+              }
+            ]
+          }
+        ]
+      },
+      "engagement": [
+        "[prefill-experiment] request=3 arm=7 group=true ple=true hc_upmix=true same_process=true",
+        "[ple-ahead] chunks=8/8 pack=34.11ms wait=14.59ms row_hits=400420 row_misses=85771 cache_limit_rows=262144",
+        "  [prefill-trace] tokens=64947 chunks=8 chunk_size=8192 chunk_widths=8192..8192 chunked=27860ms eval=58ms last_token=1ms total=27927ms"
+      ],
+      "memory_after": {
+        "active_bytes": 73223867796,
+        "peak_bytes": 78223208014,
+        "available_bytes": 33420836864,
+        "max_safe_context": 262144,
+        "cache_bytes": 1925625359
+      }
+    }
+  ],
+  "all_engagement": [
+    "[hc-prefill] engaged: S=8192 B=1 pending=false native_inject=true",
+    "[gdn-prefill] engaged: S=8192 B=1 cold=true",
+    "[qsa-pair] engaged: S=8192 kv=8192 KB=512 B=1",
+    "[hc-upmix] engaged: rows=8192 HC=4 H=2560 K=320 bits=8 transient_up_eliminated=true weight_cache=false",
+    "[moe-prefill-group] engaged: tokens=8192 E=512 K=10 H=2560 native_projections=true bf16_grouped_reduce=true",
+    "[ple-packed] engaged: rows=131072 unique=67449 packed_bytes=6744900 immutable=true output=mlx-bf16",
+    "[ple-ahead] chunks=2/2 pack=20.94ms wait=15.25ms row_hits=16190 row_misses=85755 cache_limit_rows=262144",
+    "[ple-ahead] chunks=8/8 pack=34.11ms wait=14.59ms row_hits=400420 row_misses=85771 cache_limit_rows=262144"
+  ],
+  "gain_percent": 7.372658553796918,
+  "change_from_2347_percent": -1.0090298435605605
+}
